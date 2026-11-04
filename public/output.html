@@ -3,82 +3,54 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#2f2f2f">
   <title>Pulse · Display</title>
+  <meta name="description" content="Full-screen visuals driven by the room's heartbeats and the music.">
+  <meta property="og:title" content="Pulse · Display">
+  <meta property="og:description" content="Full-screen visuals driven by the room's heartbeats and the music.">
+  <meta property="og:image" content="og.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="css/output.css">
 </head>
 <body>
   <canvas id="gl"></canvas>
   <div id="comboText" class="combo-text" aria-live="polite"></div>
+  <div id="gameBanner" class="game-banner" aria-live="polite" hidden></div>
 
   <div id="start" class="start">
     <div class="start-card">
-      <h1>Pulse</h1>
-      <p>A room full of heartbeats, rendered live.</p>
+      <p class="eyebrow"><span class="signal"></span>Live visualizer</p>
+      <h1>Pul<span>se</span></h1>
+      <p class="lead">A room full of heartbeats, rendered live.</p>
       <button id="startBtn" class="btn primary" type="button">Start display</button>
-      <p class="hint">The visuals listen to the computer's <b>system audio</b>. When Chrome asks, choose <b>Entire screen</b>, tick <b>Also share system audio</b>, then click <b>Hide</b> on the sharing bar. Uploaded files are heard directly either way.</p>
+      <p class="hint">The visuals listen to the computer's <b>system audio</b>. When Chrome asks, choose <b>Entire screen</b>, tick <b>Also share system audio</b>, then click <b>Hide</b> on the sharing bar.</p>
       <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page" width="180" height="180">
       <p class="hint">Phones scan to join, or open <span id="joinUrl" class="mono">…/input.html</span></p>
       <p id="fatal" class="fatal" hidden></p>
     </div>
   </div>
 
-  <!-- Join QR shown on the visuals (toggle with Q); outside .ui so it doesn't auto-hide. -->
   <div id="qrCorner" class="qr-corner" hidden>
     <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page">
-    <span>Scan to join in ♥</span>
+    <span>Scan to join</span>
   </div>
 
   <div id="ui" class="ui">
     <div class="hud hud-left">
-      <span id="conn" class="dot"></span>
-      <span>♥ <b id="hudBpm">--</b> <span id="hudMode">BPM</span></span>
+      <span><b id="hudBpm">--</b> <span id="hudMode">BPM</span></span>
       <span><b id="hudUsers">0</b> joined</span>
-      <button id="hbBtn" class="btn small hb-btn" type="button">♥ Live beat</button>
-      <button id="lockBtn" class="btn small lock-btn" type="button">🔓 Phones: all</button>
-      <span class="muted" id="hudFps"></span>
+      <button id="hbBtn" class="btn small hb-btn" type="button">Live beat</button>
+      <button id="lockBtn" class="btn small lock-btn" type="button">Phones: all</button>
     </div>
 
     <div class="hud hud-right">
-      <canvas id="spectrum" width="128" height="22" title="Live FFT"></canvas>
-      <button id="audioBtn" class="btn small" type="button" title="Listen to what the computer plays: choose Entire screen and tick Also share system audio">🔊 System audio</button>
-      <span id="audioStatus" class="muted">audio off</span>
-      <span id="fileAudioBadge" class="badge" title="The uploaded file is analysed directly — no capture needed" hidden>♪ file audio · direct</span>
-      <span id="spotifyHint" class="badge warn" title="Spotify's audio can't be read by the page directly. Share system audio so the visuals can hear it." hidden>Spotify: click 🔊 System audio for the visuals</span>
+      <button id="audioBtn" class="spectrum-btn" type="button" aria-label="Share system audio"><canvas id="spectrum" width="128" height="22"></canvas></button>
+      <span id="audioStatus" class="audio-note" hidden></span>
     </div>
 
     <nav id="fxBar" class="modes fx-bar" aria-label="Effect layers"></nav>
     <nav id="modes" class="modes" aria-label="Visual mode"></nav>
-
-    <div id="dock" class="dock">
-      <div class="dock-player">
-        <div id="player"></div>
-        <video id="filePlayer" class="file-player" playsinline hidden></video>
-        <div id="spotifyWrap" class="spotify-wrap" hidden></div>
-        <div id="shield" class="player-shield"></div>
-      </div>
-      <div class="dock-bar">
-        <span id="nowPlaying" class="muted">nothing playing</span>
-        <span class="dock-buttons">
-          <button id="spotifyLogin" class="btn small spotify-login" type="button" title="Opens Spotify in a new tab. Log in there, then come back: the player reloads with full songs." hidden>Log in</button>
-          <button id="playPause" class="btn small" type="button" title="Play / pause for everyone (P)">❚❚</button>
-          <button id="restart" class="btn small" type="button" title="Restart for everyone">⟲</button>
-          <button id="dockToggle" class="btn small" type="button" title="Hide video (V)">▾</button>
-        </span>
-      </div>
-      <div class="src-toggle" role="group" aria-label="Link type">
-        <button type="button" data-source="youtube">▶ YouTube</button>
-        <button type="button" data-source="spotify">● Spotify</button>
-      </div>
-      <form id="ytForm" class="dock-form" autocomplete="off">
-        <input id="ytUrl" type="text" placeholder="Paste a YouTube link" aria-label="Song or video link">
-        <button class="btn small" type="submit">Load</button>
-        <label class="btn small" title="Upload an audio or video file (max 100 MB) — its audio drives the visuals directly">⬆ File
-          <input id="mediaFile" type="file" accept="audio/*,video/*" hidden>
-        </label>
-      </form>
-    </div>
-
-    <div class="keys muted">1–7 modes · ←/→ cycle · K/E/B/R/T effects · M live beat / manual tempo · Q join QR · H hide UI · F fullscreen · V video · P play/pause</div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>

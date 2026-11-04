@@ -25,6 +25,20 @@ const TOUCH_TAP_MS = 80;             // per-socket touch pad taps (max ~12/s)
 const TOUCH_DRAG_MS = 70;            // per-socket drag sparks (max ~14/s)
 const COMBO_WINDOW_MS = 450;         // taps from different phones this close together merge
 const COMBO_TICK_MS = 50;
+const TOUCH_HOLD_MS = 100;           // per-socket hold start/stop messages
+const TILT_MIN_INTERVAL_MS = 50;     // per-socket tilt updates (phones send ~10 Hz)
+const TILT_STALE_MS = 1000;
+const CROWD_TICK_MS = 100;           // hold-together charge and tilt broadcast
+const HOLD_CHARGE_S = 4;             // seconds of holding together to charge fully
+const HOLD_MIN_RELEASE = 0.15;       // charge needed for letting go to blast
+const GAME_TICK_MS = 250;
+const GAME_START_COOLDOWN_MS = 1000;
+const RACE_COUNTDOWN_MS = 3000;
+const RACE_MS = 15000;
+const RACE_RESULT_MS = 5000;
+const RACE_HUES = [0, 0.62];         // red and blue, the ends of the selection gradient
+const PASS_MS = 60000;
+const PASS_EVERY_MS = 6000;
 
 /**
  * Shared animation controls, set by anyone (phones or displays). Numbers are clamped to their
@@ -38,6 +52,8 @@ const ANIM_DEFS = {
   bloom: { type: 'bool', def: false },
   ripple: { type: 'bool', def: false },
   hearts: { type: 'bool', def: true },      // one coloured ring per phone on each of its beats
+  invert: { type: 'bool', def: false },     // FX: negative picture
+  swap: { type: 'bool', def: false },       // false: beat moves, sound colours; true: sound moves, phones' beat colours
   tempo: { min: 40, max: 180, def: 62 },    // BPM in manual mode, or when nobody joins and no beat is heard
   // Big "macro" sliders: each one moves several things at once (see output.js -> updateControls).
   chaos: { min: 0, max: 1, def: 0.33 },     // beat punch, heat, breathing, audio gain, then warp / zoom punch / glitch
@@ -502,6 +518,136 @@ class TapCombos {
   }
 }
 
+/**
+ * Hold together: while enough phones keep a finger on the touch pad, the display charges up;
+ * when they let go, the charge is released as one blast. Half the room (2 to 8 phones) is enough.
+ */
+class CrowdHold {
+  constructor() {
+    this.holders = new Set();
+    this.charge = 0;
+  }
+
+  set(id, down) {
+    if (down) this.holders.add(id);
+    else this.holders.delete(id);
+  }
+
+  remove(id) {
+    this.holders.delete(id);
+  }
+
+  static need(people) {
+    return Math.max(2, Math.min(8, Math.ceil(people * 0.5)));
+  }
+
+  /** Advances by dt seconds; `release` is the blast's power (0..1) on the tick everyone lets go. */
+  tick(dt, people) {
+    const need = CrowdHold.need(people);
+    let release = 0;
+    if (this.holders.size >= need) {
+      this.charge = Math.min(1, this.charge + dt / HOLD_CHARGE_S);
+    } else if (this.charge >= HOLD_MIN_RELEASE) {
+      release = this.charge;
+      this.charge = 0;
+    } else {
+      this.charge = Math.max(0, this.charge - dt);
+    }
+    return { holders: this.holders.size, need, charge: this.charge, release };
+  }
+}
+
+/** Tap race: the room splits into red and blue, and whichever team taps the pad more wins. */
+class TapRace {
+  constructor(players, now) {
+    this.kind = 'race';
+    this.teams = new Map(); // socket id -> 0 (red) or 1 (blue)
+    this.ns = new Map();    // socket id -> phone number, so phones can find their team
+    [...players].sort((a, b) => a.n - b.n).forEach((p, i) => this.join(p, i % 2));
+    this.score = [0, 0];
+    this.liveAt = now + RACE_COUNTDOWN_MS;
+    this.endsAt = this.liveAt + RACE_MS;
+    this.over = this.endsAt + RACE_RESULT_MS;
+  }
+
+  join(p, team) {
+    this.teams.set(p.id, team);
+    this.ns.set(p.id, p.n);
+  }
+
+  phase(now) {
+    return now < this.liveAt ? 'countdown' : now < this.endsAt ? 'live' : 'done';
+  }
+
+  /** Counts a tap; phones that joined mid-race go to the smaller team. */
+  tap(p, now) {
+    if (this.phase(now) !== 'live') return;
+    if (!this.teams.has(p.id)) {
+      const reds = [...this.teams.values()].filter((t) => t === 0).length;
+      this.join(p, reds <= this.teams.size - reds ? 0 : 1);
+    }
+    this.score[this.teams.get(p.id)]++;
+  }
+
+  remove(id) {
+    this.teams.delete(id);
+    this.ns.delete(id);
+  }
+
+  finished(now) {
+    return now >= this.over;
+  }
+
+  snapshot(now) {
+    const phase = this.phase(now);
+    const until = phase === 'countdown' ? this.liveAt : this.endsAt;
+    const teams = {};
+    for (const [id, t] of this.teams) teams[this.ns.get(id)] = t;
+    const [a, b] = this.score;
+    return {
+      kind: 'race', phase, left: Math.max(0, Math.ceil((until - now) / 1000)), score: [a, b], hues: RACE_HUES, teams,
+      winner: phase === 'done' ? (a === b ? -1 : a > b ? 0 : 1) : undefined,
+    };
+  }
+}
+
+/** Pass the colour: one phone at a time holds it (its touches hit harder), then it moves on. */
+class PassColour {
+  constructor(players, now, random = Math.random) {
+    this.kind = 'pass';
+    this.random = random;
+    this.holder = null;
+    this.endsAt = now + PASS_MS;
+    this.pass(players, now);
+  }
+
+  pass(players, now) {
+    const others = players.filter((p) => !this.holder || p.id !== this.holder.id);
+    const pool = others.length ? others : players;
+    this.holder = pool.length ? pool[Math.floor(this.random() * pool.length)] : null;
+    this.nextAt = now + PASS_EVERY_MS;
+  }
+
+  /** Moves the colour when its time is up or its holder left; true when the holder changed. */
+  tick(players, now) {
+    const gone = this.holder && !players.some((p) => p.id === this.holder.id);
+    if (!gone && now < this.nextAt) return false;
+    this.pass(players, now);
+    return true;
+  }
+
+  remove() {}
+
+  finished(now) {
+    return now >= this.endsAt || !this.holder;
+  }
+
+  snapshot(now) {
+    const h = this.holder;
+    return { kind: 'pass', holder: h ? h.n : 0, hue: h ? h.hue : 0, left: Math.max(0, Math.ceil((this.endsAt - now) / 1000)) };
+  }
+}
+
 function lanAddresses() {
   const out = [];
   for (const list of Object.values(os.networkInterfaces())) {
@@ -558,6 +704,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
   };
   const app = express();
   app.disable('x-powered-by');
+  app.get('/', (_req, res) => res.redirect(302, '/output.html'));
   app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0 }));
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
   app.get('/api/info', (req, res) => {
@@ -600,6 +747,12 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
   const pulses = new PulseAggregator();
   const anim = new AnimationControls();
   const combos = new TapCombos();
+  const crowd = new CrowdHold();
+  const tilts = new Map(); // socket id -> { x, y, t }
+  const phones = new Map(); // socket id -> { id, n, hue } for every joined phone
+  let game = null; // TapRace or PassColour while one runs
+  let crowdWasActive = false;
+  let tiltWasActive = false;
   let animDirty = false;
   const roomSize = (room) => io.sockets.adapter.rooms.get(room)?.size || 0;
   const broadcastState = () => io.emit('yt:state', playback.snapshot());
@@ -745,8 +898,10 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       if (r === 'input') {
         // Golden-ratio hues keep each new phone's colour far from the previous ones.
         heart = { n: ++heartCounter, hue: Math.round(((heartCounter * 0.618034) % 1) * 1000) / 1000 };
+        phones.set(socket.id, { id: socket.id, ...heart });
         socket.emit('you', heart);
       }
+      socket.emit('game:state', game ? game.snapshot(Date.now()) : { kind: null });
       socket.emit('yt:state', playback.snapshot());
       socket.emit('controls:state', anim.snapshot());
       sendHostStatus();
@@ -866,12 +1021,13 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       if (data && playback.setDuration(data.id || data.videoId, finite(data.duration))) broadcastState();
     });
 
-    // Touch pad: a tap bursts on the display at the same spot in the phone's colour; dragging leaves
-    // small sparks. Only 'locked' turns it off for non-hosts.
+    // Touch pad: a tap bursts on the display at the same spot in the phone's colour. A drag stirs
+    // the picture (with the finger's velocity) or paints on it. Only 'locked' turns it off for non-hosts.
+    const touchAllowed = () => role === 'input' && heart && (host || anim.lock !== 'locked');
     let lastTap = 0;
     let lastDrag = 0;
     socket.on('touch', (data) => {
-      if (role !== 'input' || !heart || !data || (!host && anim.lock === 'locked')) return;
+      if (!touchAllowed() || !data) return;
       const x = finite(data.x, -1);
       const y = finite(data.y, -1);
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
@@ -881,13 +1037,67 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       if (drag) lastDrag = t;
       else lastTap = t;
       const r3 = (v) => Math.round(v * 1000) / 1000;
-      io.to('outputs').volatile.emit('touch:fx', { n: heart.n, h: heart.hue, x: r3(x), y: r3(y), d: drag ? 1 : 0 });
-      if (!drag) combos.tap(socket.id, x, y, heart.hue, t);
+      const fx = { n: heart.n, h: heart.hue, x: r3(x), y: r3(y), d: drag ? 1 : 0 };
+      if (drag) {
+        fx.vx = r3(clamp(finite(data.vx), -30, 30));
+        fx.vy = r3(clamp(finite(data.vy), -30, 30));
+        fx.p = data.tool === 'paint' ? 1 : 0;
+      }
+      io.to('outputs').volatile.emit('touch:fx', fx);
+      if (!drag) {
+        combos.tap(socket.id, x, y, heart.hue, t);
+        if (game && game.kind === 'race') game.tap(phones.get(socket.id), t);
+      }
+    });
+
+    let lastHold = 0;
+    socket.on('touch:hold', (down) => {
+      const t = Date.now();
+      if (!touchAllowed() || (down && t - lastHold < TOUCH_HOLD_MS)) return;
+      lastHold = t;
+      crowd.set(socket.id, !!down);
+    });
+
+    // Tilt to steer: each phone's tilt (-1..1 on both axes); the display gets the room's average.
+    let lastTilt = 0;
+    socket.on('tilt', (data) => {
+      const t = Date.now();
+      if (!touchAllowed() || !data || t - lastTilt < TILT_MIN_INTERVAL_MS) return;
+      lastTilt = t;
+      if (data.off) tilts.delete(socket.id);
+      else tilts.set(socket.id, { x: clamp(finite(data.x), -1, 1), y: clamp(finite(data.y), -1, 1), t });
+    });
+
+    // Games for the whole room: anyone may start or stop one unless the host has locked the controls.
+    let lastGame = 0;
+    socket.on('game:start', (kind, ack) => {
+      const reply = typeof ack === 'function' ? ack : () => {};
+      const t = Date.now();
+      if (!role || !mediaAllowed()) return reply({ ok: false, error: 'The host has locked the controls.' });
+      if (t - lastGame < GAME_START_COOLDOWN_MS) return reply({ ok: false, error: 'Wait a moment.' });
+      if (game) return reply({ ok: false, error: 'A game is already running.' });
+      const players = [...phones.values()];
+      if (players.length < 2) return reply({ ok: false, error: 'Games need at least two phones.' });
+      if (kind !== 'race' && kind !== 'pass') return reply({ ok: false, error: 'Unknown game.' });
+      lastGame = t;
+      game = kind === 'race' ? new TapRace(players, t) : new PassColour(players, t);
+      io.emit('game:state', game.snapshot(t));
+      reply({ ok: true });
+    });
+
+    socket.on('game:stop', () => {
+      if (!role || !mediaAllowed() || !game) return;
+      game = null;
+      io.emit('game:state', { kind: null });
     });
 
     socket.on('disconnect', () => {
       pulses.remove(socket.id);
       combos.remove(socket.id);
+      crowd.remove(socket.id);
+      tilts.delete(socket.id);
+      phones.delete(socket.id);
+      if (game) game.remove(socket.id);
     });
   });
 
@@ -930,6 +1140,41 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       io.to('outputs').emit('touch:combo', { size: c.size, x: r3(c.x), y: r3(c.y), hues: c.hues });
       for (const id of c.ids) io.to(id).emit('touch:combo', { size: c.size });
     }, COMBO_TICK_MS),
+    setInterval(() => {
+      const t = Date.now();
+      const h = crowd.tick(CROWD_TICK_MS / 1000, phones.size);
+      const active = h.holders > 0 || h.charge > 0;
+      if (active || crowdWasActive) io.volatile.emit('crowd:hold', { holders: h.holders, need: h.need, charge: Math.round(h.charge * 100) / 100 });
+      crowdWasActive = active;
+      if (h.release > 0) io.emit('crowd:release', { power: Math.round(h.release * 100) / 100, hues: [...phones.values()].slice(0, 16).map((p) => p.hue) });
+
+      let x = 0;
+      let y = 0;
+      for (const [id, v] of tilts) {
+        if (t - v.t > TILT_STALE_MS) tilts.delete(id);
+        else {
+          x += v.x;
+          y += v.y;
+        }
+      }
+      const n = tilts.size;
+      if (n > 0 || tiltWasActive) {
+        const r3 = (v) => Math.round(v * 1000) / 1000;
+        io.to('outputs').volatile.emit('tilt:agg', { x: n ? r3(x / n) : 0, y: n ? r3(y / n) : 0, n });
+      }
+      tiltWasActive = n > 0;
+    }, CROWD_TICK_MS),
+    setInterval(() => {
+      if (!game) return;
+      const t = Date.now();
+      if (game.kind === 'pass') game.tick([...phones.values()], t);
+      if (game.finished(t)) {
+        game = null;
+        io.emit('game:state', { kind: null });
+      } else {
+        io.emit('game:state', game.snapshot(t));
+      }
+    }, GAME_TICK_MS),
   ];
   server.on('close', () => timers.forEach(clearInterval));
 
@@ -1010,4 +1255,7 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, ANIM_DEFS, canChange };
+module.exports = {
+  createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, CrowdHold, TapRace, PassColour,
+  ANIM_DEFS, canChange,
+};

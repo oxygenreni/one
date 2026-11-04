@@ -39,6 +39,8 @@ test('resets when the finger is removed', () => {
   for (const { t, v } of synth(70, 10)) d.addSample(v, t, true);
   assert.ok(d.bpm > 0);
   d.addSample(20, 10100, false);
+  assert.ok(d.bpm > 0, 'a brief dropout keeps the lock');
+  d.addSample(20, 10700, false);
   assert.equal(d.bpm, 0);
   assert.equal(d.confidence, 0);
   assert.equal(d.hasContact, false);

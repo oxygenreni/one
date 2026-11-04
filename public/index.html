@@ -3,24 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#2f2f2f">
   <title>Pulse</title>
+  <meta name="description" content="A room full of heartbeats, rendered live. Phones join with a tap, a dance or their pulse.">
+  <meta property="og:title" content="Pulse">
+  <meta property="og:description" content="A room full of heartbeats, rendered live. Phones join with a tap, a dance or their pulse.">
+  <meta property="og:image" content="og.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="css/input.css">
 </head>
 <body>
   <header class="top"><h1>Pulse</h1></header>
   <main>
     <section class="card qr-card">
-      <strong>📱 Scan to join</strong>
+      <strong>Scan to join</strong>
       <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page" width="240" height="240">
       <p class="muted mono" id="joinUrl">…</p>
       <p class="muted small">Use Chrome on Android or Safari on iPhone so the camera flash works. Accept the certificate warning once.</p>
     </section>
     <a class="card" href="input.html" style="color:inherit;text-decoration:none">
-      <strong>♥ Join with your phone</strong>
-      <p class="muted">Share your heartbeat through the camera and queue YouTube tracks.</p>
+      <strong>Join with your phone</strong>
+      <p class="muted">Tap, dance or share your heartbeat to drive the visuals.</p>
     </a>
     <a class="card" href="output.html" style="color:inherit;text-decoration:none">
-      <strong>◐ Open the display</strong>
+      <strong>Open the display</strong>
       <p class="muted">Full-screen WebGL visuals driven by the room's pulse and the music.</p>
     </a>
   </main>

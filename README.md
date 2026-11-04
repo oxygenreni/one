@@ -1,13 +1,11 @@
 # Pulse — collective heartbeat visualizer
 
-Phones measure their users' heartbeats with the camera. A YouTube track plays in sync on every screen. A full-screen WebGL display turns the room's combined pulse and the music's spectrum into seven real-time shader worlds, with stackable FX layers on top.
+Phones join by tapping, dancing or measuring their heartbeat with the camera. The computer plays music from any app, and a full-screen WebGL display turns the room's combined pulse and the music's spectrum into seven real-time shader worlds, with stackable FX layers on top.
 
 ```
- phones (input.html)                server (Node/Express/Socket.io)            display (output.html)
- camera → PPG → BPM ──pulse 10Hz──▶ latest-sample-per-phone aggregator ──15Hz──▶ pulse uniforms ─┐
- YouTube URL ────────yt:submit────▶ authoritative playback clock ──yt:state──▶ YouTube player   │
- YouTube player ◀───yt:state 2s────┘   (+ time:ping clock sync)                  │ system audio ▼
-                                                                                 └─▶ Web Audio FFT → WebGL
+ phones (input.html)                     server (Node/Express/Socket.io)           display (output.html)
+ tap / dance / camera → BPM ──pulse 10Hz──▶ latest-sample-per-phone aggregator ──15Hz──▶ pulse uniforms ─┐
+                                                                     system audio → Web Audio FFT ──┴─▶ WebGL
 ```
 
 ## Run
@@ -23,9 +21,8 @@ npm run start:https    # https://<LAN-IP>:8443 with a self-signed certificate
 
 Chrome on Android often fails on self-signed certificates with `ERR_TOO_MANY_RETRIES` (Chromium issue 40418163). Use the tunnel for parties rather than `start:https`. With `start:https`, the server generates a self-signed certificate in `.cert/` the first time it runs, and each phone has to accept the browser warning once. You can supply your own certificate with `SSL_KEY=… SSL_CERT=…`. Set `PORT` to change the port.
 
-1. Open `/output.html` on the computer that drives the projector or speakers. Click **Start display**. When Chrome asks what to share, choose **Entire screen** and tick **Also share system audio**, then click **Hide** on the sharing bar. If you skip it, click **🔊 System audio** in the top-right later.
+1. Open `/output.html` on the computer that drives the projector or speakers. Click **Start display**. When Chrome asks what to share, choose **Entire screen** and tick **Also share system audio**, then click **Hide** on the sharing bar. If you skip it, click the spectrum in the top-right later. Play the music from any app on that computer (Spotify, YouTube in another tab, anything); the visuals hear it through the shared system audio.
 2. Phones scan the QR code on the main page (`/`) or the display's start screen, or open `/input.html` directly. They pick how to join: **Tap** along to the music, **Dance** with the phone, or the experimental **Heart camera**.
-3. Anyone can paste a YouTube or Spotify link (see [Spotify](#spotify)), or **upload an audio or video file** (up to 100 MB). Every player loads it and follows the server clock. Uploads are kept in `uploads/`; only the 20 newest are kept.
 
 To try it without phones, run `npm run simulate -- http://localhost:3000 25`. This starts 25 fake heartbeats. `npm test` runs the unit tests and a socket test with 30 clients.
 
@@ -35,13 +32,11 @@ To try it without phones, run `npm run simulate -- http://localhost:3000 25`. Th
 | --- | --- |
 | `1`–`7` / click | Switch visual mode (organic noise dissolve between modes). Shared with every display and phone. |
 | `K` `E` `B` `R` `T` / click | Toggle the FX layers: Kaleidoscope, Echo, Bloom, Heart Ripple, Hearts. They stack and are shared too. |
-| `M` / **♥ Live beat** button | Switch between the live beat and **Manual tempo**. In manual, phones and the music are ignored and the **Tempo** slider sets the rhythm at full strength. The HUD shows where the beat comes from: phones, ♪ music, or manual. |
-| **🔓 Phones** button | Host lock: cycles what phones may change between *all*, *sliders* only, and *none*. Hover over it to see the host PIN. |
+| `M` / **Live beat** button | Switch between the live beat and **Manual tempo**. In manual, phones and the music are ignored and the **Tempo** slider sets the rhythm at full strength. The HUD shows where the beat comes from: phones, music, or manual. |
+| **Phones** button | Host lock: cycles what phones may change between *all*, *sliders* only, and *none*. Hover over it to see the host PIN. |
 | `←` `→` | Cycle modes |
 | `H` | Hide the UI (it also hides itself after 3.5 s without mouse movement) |
 | `F` | Fullscreen |
-| `V` | Collapse the video. Playback keeps going. |
-| `P` | Play/pause for everyone |
 | `Q` | Show/hide a QR code in the corner that phones can scan to join |
 
 ## Joining from a phone
@@ -50,9 +45,9 @@ The top card asks **How are you joining?** Every choice drives the same rhythm, 
 
 | Choice | What it does |
 | --- | --- |
-| 👆 Tap (default) | Tap the big button along to the music. Each tap is a beat; the BPM is the median gap between your last few taps. |
-| 💃 Dance | Uses the phone's motion sensor. How hard you move heats up the visuals (dancers' average energy is added to `uEnergy`), and sharp jolts well above your recent movement count as beats. iPhones ask for motion permission once. |
-| ♥ Heart camera | The fingertip-over-camera pulse sensor. Experimental: it works on some phones only. |
+| Tap (default) | Tap the big button along to the music. Each tap is a beat; the BPM is the median gap between your last few taps. |
+| Dance | Uses the phone's motion sensor. How hard you move heats up the visuals (dancers' average energy is added to `uEnergy`), and sharp jolts well above your recent movement count as beats. iPhones ask for motion permission once. |
+| Heart camera | The fingertip-over-camera pulse sensor. Experimental: it works on some phones only. |
 
 A tap or dance phone that goes quiet for 3 s leaves the room until it beats again. Tap and dance phones send the same `pulse` messages as the heart sensor (BPM, confidence, beat), plus `energy` from dancers, which the server averages into `pulse:agg.motion`.
 
@@ -64,10 +59,10 @@ Under **Animation controls**, the phone page offers the visual mode, the FX laye
 
 | Slider | Effect |
 | --- | --- |
-| 🌀 Chaos | One big "how wild" control. Below its default it calms everything: softer beats, less breathing, less reaction to the music. Above it, beats hit harder and the whole picture starts to swirl and wobble and punch in on every beat. Past 60% the colour channels split apart on beats and bass hits. |
-| ✨ Glow | Dim and grey at 0, normal at its default (20%), then brighter, more vivid and blooming up to 100%. |
-| ⏩ Speed | Time scale of every animation and simulation. The beat itself is not affected. |
-| 🎨 Colour | Turns every colour around the colour wheel. |
+| Chaos | One big "how wild" control. Below its default it calms everything: softer beats, less breathing, less reaction to the music. Above it, beats hit harder and the whole picture starts to swirl and wobble and punch in on every beat. Past 60% the colour channels split apart on beats and bass hits. |
+| Glow | Dim and grey at 0, normal at its default (20%), then brighter, more vivid and blooming up to 100%. |
+| Speed | Time scale of every animation and simulation. The beat itself is not affected. |
+| Colour | Turns every colour around the colour wheel. |
 | Tempo (40–180 BPM) | The rhythm in Manual tempo mode, or when nobody joins and no beat is heard in the music. |
 
 The server holds one shared set of controls (`AnimationControls` in `server.js`). Anyone can change them, from a phone or a display, and the latest change wins. Updates are clamped and rate-limited per socket, then rebroadcast as `controls:state` at up to 20 Hz. Phones send at about 15 Hz while you drag. A control you're dragging, or changed in the last 0.7 s, ignores remote updates, so two people adjusting at once don't fight under each other's fingers. **Reset** restores the defaults for everyone. Displays smooth the values, so changes glide rather than step. The first display to connect after a server start seeds the mode and FX from its saved choice, until someone changes a control.
@@ -78,7 +73,7 @@ The display machine is the **host**: any page opened directly on the computer th
 
 | Lock | What phones (non-hosts) can do |
 | --- | --- |
-| Open (default) | Everything: mode, FX, sliders, touch pad, Reset, links, uploads, play/pause |
+| Open (default) | Everything: mode, FX, sliders, touch pad, Reset |
 | Sliders only | Sliders and the touch pad |
 | Locked | Nothing; they just add their heartbeat (the touch pad is off too) |
 
@@ -90,19 +85,27 @@ Every phone gets its own colour (golden-ratio hues, so neighbours differ). The h
 
 ### Touch pad
 
-The phone page has a **Touch pad**. A tap sends a burst to the same spot on the display, in your phone's colour: a ring that ripples the image as it spreads. Dragging leaves a trail of smaller sparks. When two or more phones tap within the same 0.45 s, their taps merge into a **combo**: a rainbow shockwave from the middle of the taps, a beat surge through the whole scene, and "COMBO ×N" on the display and the phones. More phones make a bigger shockwave.
+The phone page has a **Touch pad**. A tap sends a burst to the same spot on the display, in your phone's colour: a ring that ripples the image as it spreads. When two or more phones tap within the same 0.45 s, their taps merge into a **combo**: a rainbow shockwave from the middle of the taps, a beat surge through the whole scene, and "COMBO ×N" on the display and the phones. More phones make a bigger shockwave.
 
-The server rate-limits taps (about 12/s) and sparks (about 14/s) per phone and finds combos (`TapCombos` in `server.js`). It sends `touch:fx` and `touch:combo` to the displays, which draw up to 32 bursts at once in `fx-pre.frag` (the ripple) and `fx-final.frag` (the colour). Bursts show in every mode, with or without other FX.
+Dragging depends on the tool picked above the pad:
 
-### Spotify
+- **Stir.** In Fluid Tracers and Julia Fluid, the drag pushes the fluid with the finger's speed and drops ink in your colour, so several phones mix their colours together. In the other modes it smudges the picture along the finger.
+- **Paint.** Glowing strokes in your colour drawn over the visuals, fading over a few seconds.
 
-Both link boxes (phone and display) have a **YouTube / Spotify** switch. Pasting an obvious link of the other kind flips it for you. Spotify links must be a single **song** (or podcast episode), from Share → Copy song link. Albums and playlists are refused, because Spotify would move to the next track on its own and break the sync. The server looks up the song title through Spotify's public oEmbed endpoint.
+**Hold together.** When at least half the room (2 to 8 phones) keeps a finger on the pad, the display charges up: the picture tightens, trembles and gets a rainbow aura, and the phones show the progress. Letting go releases the charge as a blast. The longer the hold, the bigger the blast. This is `CrowdHold` in `server.js`.
 
-- **Log in to Spotify in the display's browser.** The embedded player plays full songs only for a logged-in browser, otherwise 30-second previews. When a preview runs out, the display says so and stays quiet instead of looping.
-- **Phones don't play Spotify while muted.** The embed has no volume control, so a muted phone shows the title and leaves the sound to the display. Turning sound on loads the player on that phone. It needs a Spotify login for full songs too.
-- **Sound for the visuals:** Spotify's audio is copy-protected and comes from another site, so the page can't analyse it directly. Sharing **system audio** hears it like everything else the computer plays. If a Spotify song is playing and the display hears nothing for 4 s, a yellow hint appears next to the spectrum.
-- Sync is looser than YouTube's: Spotify reports its position less often and seeks coarsely, so it corrects only when it drifts more than 0.8 s.
-- Only displays report a Spotify song's length to the server, and only if it's longer than a preview, so a logged-out phone can't cut the song short for everyone.
+**Tilt to steer.** With the toggle on, tipping the phone tips the picture like a tray of liquid. In the fluid modes it pulls the fluid, and elsewhere it slides the picture. Tilt is measured from however the phone was held when it was switched on, and the display uses the average of every tilting phone.
+
+The server rate-limits taps (about 12/s), drags (about 14/s) and tilt (about 20/s) per phone and finds combos (`TapCombos` in `server.js`). It sends `touch:fx`, `touch:combo`, `crowd:hold`, `crowd:release` and `tilt:agg`. The display draws bursts, smudges, the tilt slide and the charge in `fx-pre.frag`, and the burst colours, paint, aura and game tints in `fx-final.frag`. Stirring goes into the fluid sim itself (`touchFluid` in `output.js`).
+
+### Games
+
+The **Games** card starts a game for the whole room. It needs at least two phones and runs one game at a time. Anyone can start or stop a game unless the host has locked the controls.
+
+- **Tap race.** The room splits into Red and Blue. After a 3-second countdown, each tap on the pad scores for your team for 15 seconds. The display floods with each team's colour from its side, and the border moves with the score. Phones that join mid-race go to the smaller team.
+- **Pass the colour.** One phone holds the colour for a few seconds, then it moves to another phone at random. The holder's touches hit three times harder, and the display's edges glow in the holder's colour. A round lasts a minute.
+
+The server runs both games (`TapRace` and `PassColour` in `server.js`) and sends `game:state` to everyone four times a second.
 
 ### Out-of-date server warning
 
@@ -120,14 +123,9 @@ At startup the server fingerprints its own code and the pages (`computeBuildId`)
 
 When the hardware allows it, the flash (torch) is turned on and a wake lock keeps the screen on.
 
-**Server (`server.js`).** It keeps only the latest sample from each phone and combines them on a fixed 15 Hz tick, so the work grows with the number of users (O(N)) rather than with the message rate. The combined values are a confidence-weighted BPM, the beat count, and the number of active sensors. Incoming pulses are limited to 20 Hz per socket. Payloads are clamped and validated, outbound pulse messages are `volatile`, and message compression is off. The playback clock is authoritative: `videoId`, `position`, `playing`, `serverTime`, and a 1.5 s lead-in so everyone can buffer. It is broadcast on every change and every 2 s.
+**Server (`server.js`).** It keeps only the latest sample from each phone and combines them on a fixed 15 Hz tick, so the work grows with the number of users (O(N)) rather than with the message rate. The combined values are a confidence-weighted BPM, the beat count, and the number of active sensors. Incoming pulses are limited to 20 Hz per socket. Payloads are clamped and validated, outbound pulse messages are `volatile`, and message compression is off.
 
-**Sync (`public/js/sync.js`).** Clients estimate their offset from the server clock using the lowest-round-trip `time:ping` sample. Every 250 ms, `YouTubeSync` checks the player against the server:
-
-- it re-asserts play or pause, which undoes any local pause, end, or tap
-- it hard-seeks if the player drifts more than 0.3 s
-- a transparent shield over the iframe blocks local control
-- if autoplay is blocked, it shows a "Tap to sync" button
+**Sync (`public/js/sync.js`).** Clients estimate their offset from the server clock using the lowest-round-trip `time:ping` sample.
 
 **Display (`public/js/output.js`, `public/shaders/`).** Built on WebGL2. Each pass draws one fullscreen triangle. Uniform types are read from the compiled program. Ping-pong render targets use float or half-float formats. Pulse values reach the shaders through these uniforms:
 
@@ -158,16 +156,15 @@ A local oscillator runs at the room's BPM, and real beats from phones nudge its 
 | Echo (video feedback) | trail length follows the heart rate, and beats surge the zoom | bass adds zoom, treble adds a hue drift on the trails |
 | Bloom | beats flash the glow | louder music lowers the threshold and raises the glow |
 | Heart Ripple | every heartbeat sends out a shockwave ring | — |
+| Invert | — (the whole picture turns negative) | — |
+
+**Music → Motion** (X, off by default) swaps what drives what, for every mode and layer. Off: the beat (hearts, taps, dancers) moves the picture and the sound turns the colours, with each bass hit nudging the whole palette round the wheel. On: the sound moves the picture (bass hits are the beat and also time the fluid pushes and seeds, loudness is the energy, the level sets the sway), and the phones' beat and dancing turn the colours. When swapped, only phones colour the picture, so with nobody joined the colours just drift slowly. Switching glides over about a second.
 
 ### Why the display needs system audio
 
-The YouTube and Spotify players are cross-origin iframes, so the Web Audio API cannot read their audio directly. The display therefore listens to the computer's **system audio**: `getDisplayMedia` with "Entire screen" and "Also share system audio" (Chrome or Edge on Windows and ChromeOS). Only the audio is used; the screen video is requested at the lowest size and switched off. A whole-screen share has no coloured tab outline; click **Hide** on Chrome's "sharing your screen" bar. The captured audio only feeds an `AnalyserNode` and is never played a second time.
-
-**Uploaded files** don't need it: they're served from this server, so the display analyses them directly with `createMediaElementSource` while they play.
+The music plays in other apps, so the Web Audio API cannot read it directly. The display therefore listens to the computer's **system audio**: `getDisplayMedia` with "Entire screen" and "Also share system audio" (Chrome or Edge on Windows and ChromeOS). Only the audio is used; the screen video is requested at the lowest size and switched off. A whole-screen share has no coloured tab outline; click **Hide** on Chrome's "sharing your screen" bar. The captured audio only feeds an `AnalyserNode` and is never played a second time.
 
 ## Notes
 
-- Phones start **muted** by default, so 30 phones don't echo each other. Each person can turn sound on.
 - Mobile browsers require HTTPS before a page can use the camera (localhost is the only exception).
-- Websites can turn on the camera flash only in **Chrome on Android** or **Safari on iOS 17.4+**. Firefox doesn't support it. Without a flash, hold your fingertip over the camera in front of a bright lamp. The **Camera diagnostics** section on the phone page shows what the browser reports, and the server console logs the same information.
-- Some videos don't allow embedding. Players report this, and you can submit another link.
+- Websites can turn on the camera flash only in **Chrome on Android** or **Safari on iOS 17.4+**. Firefox doesn't support it. Without a flash, hold your fingertip over the camera in front of a bright lamp. The server console logs what each phone's browser reports about its camera and flash.

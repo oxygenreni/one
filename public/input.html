@@ -3,8 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b0710">
+  <meta name="theme-color" content="#2f2f2f">
   <title>Pulse · Input</title>
+  <meta name="description" content="Join the room with your phone: tap, dance or share your heartbeat to drive the visuals.">
+  <meta property="og:title" content="Pulse · Input">
+  <meta property="og:description" content="Join the room with your phone: tap, dance or share your heartbeat to drive the visuals.">
+  <meta property="og:image" content="og.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="css/input.css">
 </head>
 <body>
@@ -25,9 +31,9 @@
       </div>
       <div id="joinTitle" class="field-label">How are you joining?</div>
       <div id="sourceGrid" class="chips source-chips" role="group" aria-label="How are you joining?">
-        <button type="button" class="chip" data-join="tap">👆 Tap</button>
-        <button type="button" class="chip" data-join="dance">💃 Dance</button>
-        <button type="button" class="chip" data-join="heart">♥ Heart camera</button>
+        <button type="button" class="chip" data-join="tap">Tap</button>
+        <button type="button" class="chip" data-join="dance">Dance</button>
+        <button type="button" class="chip" data-join="heart">Heart camera</button>
       </div>
 
       <div id="panelTap" class="join-panel" hidden>
@@ -46,14 +52,13 @@
         <canvas id="wave" class="wave" width="600" height="120" aria-label="Live pulse waveform"></canvas>
         <p id="sensorStatus" class="status">Tap start, then cover the rear camera <em>and</em> flash with a fingertip. Hold still, press lightly.</p>
         <button id="sensorBtn" class="btn primary" type="button">Start pulse sensor</button>
-        <button id="flashBtn" class="btn flash" type="button" hidden>🔦 Flash off</button>
-        <details class="diag"><summary>Camera diagnostics</summary><pre id="diagLog"></pre></details>
+        <button id="flashBtn" class="btn flash" type="button" hidden>Flash off</button>
       </div>
     </section>
 
     <section class="card room">
       <div><span class="muted">Room beat</span> <strong id="roomBpm">--</strong> <span class="muted">BPM</span></div>
-      <div class="muted"><span id="roomSensors">0</span> joined · <span id="roomDisplays">0</span> displays</div>
+      <div class="muted"><span id="roomSensors">0</span> joined</div>
     </section>
 
     <section class="card touch" aria-labelledby="touchTitle">
@@ -61,8 +66,28 @@
         <h2 id="touchTitle">Touch pad</h2>
         <span id="comboMsg" class="combo-msg" aria-live="polite"></span>
       </div>
-      <div id="touchPad" class="touch-pad" aria-label="Touch pad: tap to send a burst to the display"></div>
-      <p id="touchHint" class="muted small">Tap to send a burst to the same spot on the display, drag to leave sparks. Tap together with others and your bursts merge into a shockwave.</p>
+      <div class="tool-row">
+        <div id="toolGrid" class="chips" role="group" aria-label="Touch pad tool">
+          <button type="button" class="chip" data-tool="stir">Stir</button>
+          <button type="button" class="chip" data-tool="paint">Paint</button>
+        </div>
+        <button id="tiltBtn" type="button" class="chip" aria-pressed="false">Tilt to steer</button>
+      </div>
+      <div id="touchPad" class="touch-pad" aria-label="Touch pad: tap, drag or hold to play with the display"></div>
+      <p id="touchHint" class="muted small"></p>
+      <div id="holdMeter" class="meter hold-meter" hidden aria-hidden="true"><div id="holdFill" class="meter-fill"></div></div>
+    </section>
+
+    <section class="card games" aria-labelledby="gamesTitle">
+      <div class="anim-head">
+        <h2 id="gamesTitle">Games</h2>
+        <button id="gameStop" class="btn small" type="button" hidden>Stop</button>
+      </div>
+      <p id="gameStatus" class="status small">Start a game for the whole room.</p>
+      <div id="gameGrid" class="chips">
+        <button type="button" class="chip" data-game="race">Tap race</button>
+        <button type="button" class="chip" data-game="pass">Pass the colour</button>
+      </div>
     </section>
 
     <section class="card anim" aria-labelledby="animTitle">
@@ -70,7 +95,7 @@
         <h2 id="animTitle">Animation controls</h2>
         <button id="animReset" class="btn small" type="button">Reset</button>
       </div>
-      <p id="hbState" class="status small"></p>
+      <p id="hbState" class="status small manual" hidden></p>
       <p id="lockState" class="status small manual" hidden></p>
       <div id="hostRow" class="host-row"></div>
       <div class="field-label">Visual</div>
@@ -78,43 +103,10 @@
       <div class="field-label">Effects</div>
       <div id="fxGrid" class="chips"></div>
       <div id="sliders" class="sliders"></div>
-      <p class="muted small">Shared with everyone in the room. The latest change wins.</p>
     </section>
 
-    <section class="card video">
-      <div class="src-toggle" role="group" aria-label="Link type">
-        <button type="button" data-source="youtube">▶ YouTube</button>
-        <button type="button" data-source="spotify">● Spotify</button>
-      </div>
-      <form id="ytForm" class="yt-form" autocomplete="off">
-        <input id="ytUrl" type="text" inputmode="url" placeholder="Paste a YouTube link" aria-label="Song or video link" required>
-        <button class="btn" type="submit">Play</button>
-      </form>
-      <div class="upload-row">
-        <label class="btn upload-btn">⬆ Upload audio / video
-          <input id="mediaFile" type="file" accept="audio/*,video/*" hidden>
-        </label>
-        <span id="uploadProgress" class="muted small"></span>
-      </div>
-      <p id="ytMsg" class="status small" role="status"></p>
-      <div class="player-wrap">
-        <div id="player"></div>
-        <video id="filePlayer" class="file-player" playsinline hidden></video>
-        <div id="spotifyWrap" class="spotify-wrap" hidden></div>
-        <div id="audioOnly" class="player-empty audio-only" hidden>♪ <span id="audioTitle"></span></div>
-        <!-- Shield blocks taps so the local player can't be paused or scrubbed out of sync. -->
-        <div id="shield" class="player-shield"></div>
-        <button id="tapSync" class="btn primary tap-sync" type="button" hidden>Tap to sync video</button>
-        <div id="ytEmpty" class="player-empty">Nothing playing yet</div>
-      </div>
-      <div class="video-meta">
-        <span id="ytStatus" class="muted small">waiting for server…</span>
-        <button id="soundBtn" class="btn small" type="button">🔇 Sound off</button>
-      </div>
-    </section>
   </main>
 
-  <!-- Hidden capture pipeline -->
   <video id="cam" playsinline muted autoplay class="hidden-capture"></video>
   <canvas id="sample" width="32" height="24" class="hidden-capture"></canvas>
 

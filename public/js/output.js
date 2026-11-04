@@ -18,9 +18,7 @@
   const host = { is: false, pin: null };
   socket.on('connect', () => {
     socket.emit('hello', { role: 'output', controls: savedLook(), pin: hostPin || undefined });
-    $('conn').classList.add('on');
   });
-  socket.on('disconnect', () => $('conn').classList.remove('on'));
   socket.on('host:status', (st) => {
     host.is = !!st.host;
     host.pin = st.pin || null;
@@ -39,7 +37,7 @@
       const m = parseInt(localStorage.getItem('pulse.mode'), 10);
       if (m >= 0) out.mode = m;
       const f = JSON.parse(localStorage.getItem('pulse.fx') || '{}');
-      for (const k of ['kaleido', 'echo', 'bloom', 'ripple', 'hearts']) if (typeof f[k] === 'boolean') out[k] = f[k];
+      for (const k of ['kaleido', 'echo', 'bloom', 'ripple', 'hearts', 'invert']) if (typeof f[k] === 'boolean') out[k] = f[k];
     } catch (_) { /* ignore */ }
     return out;
   }
@@ -50,7 +48,7 @@
    * `ctl` is a per-frame smoothed copy so 15 Hz slider updates glide instead of stepping.
    */
   const controls = {
-    heartbeat: true, mode: 0, kaleido: false, echo: false, bloom: false, ripple: false, hearts: true,
+    heartbeat: true, mode: 0, kaleido: false, echo: false, bloom: false, ripple: false, hearts: true, invert: false, swap: false,
     lock: 'open', tempo: 62, chaos: 0.33, glow: 0.2, speed: 1, hue: 0,
   };
   const SMOOTHED = ['tempo', 'chaos', 'glow', 'speed', 'hue'];
@@ -218,22 +216,235 @@
     bursts.splice(weakest, 1);
   }
 
+  // ---- Stir and paint: drags from phones, used up by the next frame. In the fluid modes a stir
+  // pushes the fluid and drops ink in the phone's colour; elsewhere it smudges the picture along the
+  // finger. Paint strokes go onto their own layer that fades over a few seconds.
+  const MAX_SMUDGES = 16;  // size of the uSmudges arrays in fx-pre.frag
+  const STROKE_GAP_MS = 250; // drag samples further apart than this start a new stroke
+  const strokes = [];      // this frame's segments: { x0, y0, x1, y1, vx, vy, hue, power, paint }
+  const lastDrag = new Map(); // phone number -> { x, y, t } of its previous drag sample
+  const smudges = [];      // { x, y, vx, vy (pad units), age }
+  const smudgeData = new Float32Array(MAX_SMUDGES * 4);
+  const smudgeAge = new Float32Array(MAX_SMUDGES);
+
+  // Room-wide play: tilt, hold-together charge and the games (see server.js).
+  const room = {
+    tiltTarget: [0, 0], tilt: [0, 0], pan: [0, 0],
+    chargeTarget: 0, charge: 0, blast: 0,
+    game: { kind: null }, raceSplit: 0.5, raceOn: 0, passOn: 0, passHue: 0,
+  };
+  const HOLDER_POWER = 3; // the phone holding the colour hits this much harder
+
+  const hasFluid = () => !!modes && (modes[current].id === 'fluid' || modes[current].id === 'juliafluid');
+
+  /** Pass the colour boosts its holder; in a tap race everyone's touches turn their team's colour. */
+  function touchStyle(e) {
+    const g = room.game;
+    if (g.kind === 'pass' && g.holder === e.n) return { hue: e.h, power: HOLDER_POWER };
+    if (g.kind === 'race' && g.teams && g.teams[e.n] != null) return { hue: g.hues[g.teams[e.n]], power: 1 };
+    return { hue: e.h, power: 1 };
+  }
+
   socket.on('touch:fx', (e) => {
-    const drag = e.d === 1;
-    addBurst({ x: e.x, y: e.y, hue: e.h, power: drag ? 0.5 : 1, age: 0, life: drag ? 0.9 : 1.8 });
+    const { hue, power } = touchStyle(e);
+    if (e.d !== 1) {
+      lastDrag.delete(e.n);
+      addBurst({ x: e.x, y: e.y, hue, power: Math.min(2.5, power), age: 0, life: 1.8 });
+      return;
+    }
+    const t = performance.now();
+    const prev = lastDrag.get(e.n);
+    const from = prev && t - prev.t < STROKE_GAP_MS ? prev : { x: e.x, y: e.y };
+    lastDrag.set(e.n, { x: e.x, y: e.y, t });
+    const vx = e.vx || 0;
+    const vy = e.vy || 0;
+    strokes.push({ x0: from.x, y0: from.y, x1: e.x, y1: e.y, vx, vy, hue, power, paint: e.p === 1 });
+    if (e.p !== 1 && !hasFluid()) {
+      smudges.unshift({ x: e.x, y: e.y, vx: vx * power, vy: vy * power, age: 0 });
+      smudges.length = Math.min(smudges.length, MAX_SMUDGES);
+    }
   });
   socket.on('touch:combo', (c) => {
     addBurst({ x: c.x, y: c.y, hue: -1, power: Math.min(4, 1.2 + 0.6 * c.size), age: 0, life: 2.6 });
     pulse.kick = Math.min(1.5, pulse.kick + 0.2 * Math.min(c.size, 5)); // the whole scene surges too
-    showCombo(c.size);
+    showBig(`COMBO ×${c.size}`);
   });
 
-  function showCombo(size) {
+  socket.on('tilt:agg', (t) => {
+    room.tiltTarget = t.n > 0 ? [clamp(t.x, -1, 1), clamp(t.y, -1, 1)] : [0, 0];
+  });
+  socket.on('crowd:hold', (h) => {
+    room.chargeTarget = clamp(h.charge, 0, 1);
+  });
+  // Letting go together: a rainbow blast from the middle, sized by how long the room held.
+  socket.on('crowd:release', (r) => {
+    const p = clamp(r.power, 0, 1);
+    room.chargeTarget = 0;
+    room.charge = 0;
+    room.blast = p;
+    addBurst({ x: 0.5, y: 0.5, hue: -1, power: 2 + 2 * p, age: 0, life: 3 });
+    const hues = r.hues && r.hues.length ? r.hues : [-1];
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TAU;
+      addBurst({ x: 0.5 + Math.cos(a) * 0.22, y: 0.5 + Math.sin(a) * 0.3, hue: hues[i % hues.length], power: 1 + p, age: 0, life: 2.2 });
+    }
+    pulse.kick = 1.5;
+    showBig('BLAST!');
+  });
+
+  socket.on('game:state', (s) => {
+    const was = room.game;
+    room.game = s && s.kind ? s : { kind: null };
+    const g = room.game;
+    if (g.kind === 'race') {
+      if (g.phase === 'countdown' && (was.kind !== 'race' || was.left !== g.left)) showBig(String(g.left));
+      if (g.phase === 'live' && was.phase === 'countdown') showBig('GO!');
+      if (g.phase === 'done' && was.phase !== 'done') showBig(g.winner < 0 ? 'TIE!' : `${g.winner === 0 ? 'RED' : 'BLUE'} WINS`);
+    }
+    if (g.kind === 'pass' && was.holder !== g.holder) room.passHue = g.hue;
+    renderGameBanner();
+  });
+
+  function renderGameBanner() {
+    const g = room.game;
+    const el = $('gameBanner');
+    el.hidden = !g.kind;
+    if (!g.kind) return;
+    el.textContent = '';
+    const add = (cls, text, color) => {
+      const s = document.createElement('span');
+      if (cls) s.className = cls;
+      if (color) s.style.color = color;
+      s.textContent = text;
+      el.appendChild(s);
+    };
+    const teamColor = (i) => `hsl(${Math.round(g.hues[i] * 360)} 95% 60%)`;
+    if (g.kind === 'race') {
+      add('team', `Red ${g.score[0]}`, teamColor(0));
+      add('muted', g.phase === 'done' ? 'final' : g.phase === 'countdown' ? `starts in ${g.left}` : `${g.left}s`);
+      add('team', `${g.score[1]} Blue`, teamColor(1));
+    } else {
+      add('dot', '', `hsl(${Math.round(g.hue * 360)} 95% 60%)`);
+      add('', 'Pass the colour');
+      add('muted', `${g.left}s`);
+    }
+  }
+
+  /** Big centred text for combos, blasts and game moments. */
+  function showBig(text) {
     const el = $('comboText');
-    el.textContent = `COMBO ×${size}`;
+    el.textContent = text;
     el.classList.remove('show');
     void el.offsetWidth; // restart the animation
     el.classList.add('show');
+  }
+
+  const TILT_PAN = 0.35;     // full tilt pans the picture this far (non-fluid modes)
+  const TILT_FLUID = 1400;   // full tilt's pull on the fluid (texels/s²)
+  const STIR_FORCE = 0.9;    // finger speed -> fluid velocity
+  const BLAST_FORCE = 2600;
+
+  /** Smooths the room's tilt, charge and game overlays; ages the smudges. */
+  function updateRoom(dt) {
+    const k = lerpK(dt, 0.25);
+    room.tilt = room.tilt.map((v, i) => v + (room.tiltTarget[i] - v) * k);
+    const panTo = hasFluid() ? [0, 0] : room.tilt.map((v) => v * TILT_PAN);
+    room.pan = room.pan.map((v, i) => v + (panTo[i] - v) * lerpK(dt, 0.4));
+    room.charge += (room.chargeTarget - room.charge) * lerpK(dt, 0.15);
+    const g = room.game;
+    room.raceOn += ((g.kind === 'race' ? (g.phase === 'countdown' ? 0.35 : 1) : 0) - room.raceOn) * lerpK(dt, 0.3);
+    if (g.kind === 'race') {
+      const total = g.score[0] + g.score[1];
+      room.raceSplit += ((total > 0 ? g.score[0] / total : 0.5) - room.raceSplit) * lerpK(dt, 0.3);
+    }
+    room.passOn += ((g.kind === 'pass' ? 1 : 0) - room.passOn) * lerpK(dt, 0.4);
+    if (g.kind === 'pass') room.passHue = g.hue;
+    for (let i = smudges.length - 1; i >= 0; i--) {
+      smudges[i].age += dt;
+      if (smudges[i].age > 1.4) smudges.splice(i, 1);
+    }
+  }
+
+  /** Packs the smudges for fx-pre.frag: xy spot and zw finger velocity, in its aspectUv space. */
+  function smudgeUniforms() {
+    if (hasFluid()) return 0;
+    const aspect = canvas.width / Math.max(1, canvas.height);
+    smudges.forEach((s, i) => {
+      smudgeData[i * 4] = (s.x * 2 - 1) * aspect;
+      smudgeData[i * 4 + 1] = 1 - s.y * 2;
+      smudgeData[i * 4 + 2] = s.vx * 2 * aspect;
+      smudgeData[i * 4 + 3] = -s.vy * 2;
+      smudgeAge[i] = s.age;
+    });
+    return smudges.length;
+  }
+
+  /** Phones' stirs, the room's tilt and any blast, pushed into a fluid sim (from its update). */
+  function touchFluid(f, dt) {
+    const [tw, th] = f.vel.texel;
+    for (const s of strokes) {
+      if (s.paint) continue;
+      const len = Math.hypot((s.x1 - s.x0) * f.aspect, s.y1 - s.y0);
+      const steps = Math.min(6, 1 + Math.floor(len / 0.025));
+      const vx = clamp((s.vx / tw) * STIR_FORCE, -3000, 3000) * s.power;
+      const vy = clamp((-s.vy / th) * STIR_FORCE, -3000, 3000) * s.power;
+      const ink = hsv(s.hue < 0 ? 0 : s.hue, 0.85, Math.min(1.2, 0.5 * s.power) / Math.sqrt(steps));
+      for (let i = 1; i <= steps; i++) {
+        const x = s.x0 + ((s.x1 - s.x0) * i) / steps;
+        const y = 1 - (s.y0 + ((s.y1 - s.y0) * i) / steps);
+        f.splat(f.vel, x, y, [vx, vy, 0], 0.0022);
+        f.splat(f.dye, x, y, ink, 0.0016);
+      }
+    }
+    const [gx, gy] = room.tilt;
+    if (Math.abs(gx) + Math.abs(gy) > 0.02) f.splat(f.vel, 0.5, 0.5, [gx * TILT_FLUID * dt, -gy * TILT_FLUID * dt, 0], 2);
+    if (room.blast > 0) {
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * TAU;
+        const x = 0.5 + (Math.cos(a) * 0.06) / f.aspect;
+        const y = 0.5 + Math.sin(a) * 0.06;
+        f.splat(f.vel, x, y, [Math.cos(a) * BLAST_FORCE * room.blast, Math.sin(a) * BLAST_FORCE * room.blast, 0], 0.006);
+        f.splat(f.dye, x, y, hsv(i / 8, 0.9, 1.2 * room.blast), 0.004);
+      }
+    }
+  }
+
+  // ---- Paint layer: strokes stamped into their own texture that fades every frame. Its size follows
+  // the window's shape only, so the display's adaptive resolution never wipes it.
+  const PAINT_FADE_S = 2.5; // strokes lose about two thirds of their brightness in this time
+  const PAINT_SIZE = 480;   // short side of the paint texture, in texels
+  const paint = { layer: null, left: 0 }; // `left`: seconds until the layer is surely blank
+
+  function updatePaint(dt) {
+    const fresh = strokes.filter((s) => s.paint);
+    if (!fresh.length && paint.left <= 0) return false;
+    const [w, h] = simSize(PAINT_SIZE);
+    if (!paint.layer || paint.layer.w !== w || paint.layer.h !== h) {
+      if (paint.layer) paint.layer.destroy();
+      paint.layer = createDouble(w, h, fluidFmt);
+    }
+    const L = paint.layer;
+    draw(programs['fluid-scale'], { uSource: L.read.tex, uValue: Math.exp(-dt / PAINT_FADE_S) }, L.write);
+    L.swap();
+    const aspect = w / h;
+    for (const s of fresh) {
+      const len = Math.hypot((s.x1 - s.x0) * aspect, s.y1 - s.y0);
+      const steps = Math.min(10, 1 + Math.floor(len / 0.012));
+      const col = hsv(s.hue < 0 ? 0 : s.hue, 0.8, 0.55 + 0.15 * Math.min(s.power, 2));
+      for (let i = 1; i <= steps; i++) {
+        draw(programs['fluid-splat'], {
+          uTarget: L.read.tex,
+          uPoint: [s.x0 + ((s.x1 - s.x0) * i) / steps, 1 - (s.y0 + ((s.y1 - s.y0) * i) / steps)],
+          uColor: col,
+          uRadius: 0.00035 * Math.min(s.power, 2),
+          uAspect: aspect,
+        }, L.write);
+        L.swap();
+      }
+    }
+    if (fresh.length) paint.left = PAINT_FADE_S * 5;
+    paint.left -= dt;
+    return true;
   }
 
   /** Ages the bursts (real time) and packs them for the shaders: xy in aspectUv space, z age, w power. */
@@ -411,24 +622,8 @@
   }
 
   /**
-   * Uploaded files are served from our own origin, so their audio can be analysed directly —
-   * no capture needed. The element is routed through Web Audio once (it must then also feed
-   * the speakers via the destination node).
-   */
-  function connectFileAudio() {
-    if (audio.fileAnalyser) return;
-    const el = $('filePlayer');
-    ensureAudioContext();
-    const src = audio.ctx.createMediaElementSource(el);
-    audio.fileAnalyser = makeAnalyser();
-    src.connect(audio.fileAnalyser);
-    src.connect(audio.ctx.destination);
-  }
-
-  /**
    * Captures the computer's system audio (whatever it plays: YouTube, Spotify, anything) for
-   * analysis. The players are cross-origin, so their audio can't be tapped directly. Chrome only
-   * offers system audio with a screen share, so the cheapest possible video is requested and
+   * analysis. Chrome only offers system audio with a screen share, so the cheapest possible video is requested and
    * switched off; a whole-screen share also avoids Chrome's coloured "shared tab" outline.
    */
   async function connectAudio() {
@@ -450,7 +645,7 @@
     stream.getVideoTracks().forEach((t) => (t.enabled = false));
     const analyser = makeAnalyser();
     const source = audio.ctx.createMediaStreamSource(stream);
-    // Analyse only; never route to the speakers (the YouTube player already plays it).
+    // Analyse only; never route to the speakers (the computer is already playing it).
     source.connect(analyser);
 
     audio.stream = stream;
@@ -459,9 +654,9 @@
     audio.mode = 'system';
     stream.getAudioTracks()[0].addEventListener('ended', () => {
       disconnectAudio();
-      setAudioStatus('audio sharing stopped');
+      setAudioStatus('Audio sharing stopped. Click the spectrum to share again.');
     });
-    setAudioStatus('system audio ✓');
+    setAudioStatus('');
   }
 
   function disconnectAudio() {
@@ -489,13 +684,7 @@
 
   function updateAudio(dt) {
     let bass = 0, mid = 0, treble = 0, nb = 0, nm = 0, nt = 0;
-    // An uploaded file playing on this display is analysed directly; otherwise use the capture source.
-    const fileDirect = audio.fileAnalyser && yt.kind === 'file';
-    if (fileDirect !== audio.fileDirect) {
-      audio.fileDirect = fileDirect;
-      $('fileAudioBadge').hidden = !fileDirect;
-    }
-    const analyser = fileDirect ? audio.fileAnalyser : audio.analyser;
+    const analyser = audio.analyser;
     if (analyser) {
       analyser.getByteFrequencyData(audio.freq);
       for (let i = 0; i < FFT_BINS; i++) {
@@ -515,18 +704,8 @@
       audio.bins.fill(0);
     }
 
-    // Spotify can't be analysed directly: hint at a capture source if nothing is being heard.
-    const rawLevel = Math.max(bass, mid, treble);
-    audio.silentFor = analyser && rawLevel > 0.03 ? 0 : (audio.silentFor || 0) + dt;
-    const exp = yt.expected();
-    const spotifyDeaf = yt.kind === 'spotify' && !!exp && exp.playing && audio.silentFor > 4;
-    if (spotifyDeaf !== audio.spotifyDeaf) {
-      audio.spotifyDeaf = spotifyDeaf;
-      $('spotifyHint').hidden = !spotifyDeaf;
-    }
-
     // Slow automatic gain so quiet and loud tracks both drive the visuals fully.
-    const raw = rawLevel;
+    const raw = Math.max(bass, mid, treble);
     audio.peak = Math.max(raw, audio.peak * Math.exp(-dt / 6), 0.08);
     const g = ctl.audio / audio.peak; // the audio-reactivity control scales everything, including onsets
     const k = lerpK(dt, 0.08);
@@ -547,8 +726,10 @@
     audio.onset += (audio.onsetRaw - audio.onset) * lerpK(dt, audio.onsetRaw > audio.onset ? 0.04 : 0.05);
   }
 
+  /** Only problems are shown; while audio flows, the spectrum says enough. */
   function setAudioStatus(t) {
     $('audioStatus').textContent = t;
+    $('audioStatus').hidden = !t;
   }
 
   // ======================================================================== WebGL core
@@ -742,6 +923,64 @@
     return progs;
   }
 
+  // ======================================================================== drive routing
+  /**
+   * What every mode and FX reads instead of `pulse` / `audio` directly.
+   * Normal: the beat (hearts, taps, dancers) moves the picture and the sound turns the colours.
+   * Swapped (shared `swap` control): the sound moves the picture and the phones' beat turns the
+   * colours. Swapped, only phones colour the picture: the beat clock's music/tempo fallback doesn't.
+   */
+  const drv = {
+    energy: 0, beat: 0, breath: 0, wave: 0, bass: 0, mid: 0, treble: 0, level: 0, onset: 0,
+    mix: 0,    // 0 = normal routing, 1 = swapped (glides between the two)
+    phones: 0, // smoothed: 1 while phones set the rhythm
+    sway: 0,   // the sound's own slow breathing clock while swapped
+    hue: 0,    // whole-palette turn driven by the colour source (turns)
+    beatEvents: 0, // motion beats: the phones' beats normally, the sound's hits when swapped
+    seenBeats: 0,
+    seenOnsets: 0,
+    thump: 0,  // swapped: how hard the bass is hitting right now (0..1)
+  };
+
+  function updateDrive(dt) {
+    drv.mix += ((controls.swap ? 1 : 0) - drv.mix) * lerpK(dt, 0.4);
+    drv.phones += ((pulse.source === 'phones' ? 1 : 0) - drv.phones) * lerpK(dt, 0.5);
+    const m = drv.mix;
+    const lerp = (a, b) => a + (b - a) * m;
+    // Motion from the sound: bass hits are the beat, loudness the energy, the level sets the sway.
+    drv.sway += dt * (0.1 + 0.6 * audio.level);
+    const sndEnergy = clamp(0.1 + 1.1 * audio.level + 0.4 * audio.bass + ctl.heat, 0, 1);
+    const sndBeat = clamp(1.4 * audio.onset * ctl.intensity, 0, 1.5);
+    const sndBreath = Math.sin(drv.sway * TAU) * ctl.breath * (0.3 + 0.9 * audio.level);
+    const sndWave = clamp((0.8 * audio.bass + 0.6 * audio.onset) * ctl.intensity, 0, 1);
+    // Colour from the phones: their beat throb, how hard they dance or tap.
+    const ph = drv.phones;
+    const hWave = pulse.wave * ph;
+    const hBeat = pulse.beat * ph;
+    const hHeat = clamp(0.5 * pulse.energy * ph + 0.6 * hWave + 0.6 * pulse.motion, 0, 1);
+    drv.energy = lerp(pulse.energy, sndEnergy);
+    drv.beat = lerp(pulse.beat, sndBeat);
+    drv.breath = lerp(pulse.breath, sndBreath);
+    drv.wave = lerp(pulse.wave, sndWave);
+    drv.bass = lerp(audio.bass, hWave);
+    drv.mid = lerp(audio.mid, hHeat);
+    drv.treble = lerp(audio.treble, hBeat);
+    drv.level = lerp(audio.level, clamp(0.4 * pulse.energy * ph + 0.6 * hWave, 0, 1));
+    drv.onset = lerp(audio.onset, hBeat);
+    // The colour source also turns the whole palette: sound hits normally, phone beats when swapped.
+    const sndHue = 0.06 * audio.level + 0.35 * audio.onset;
+    const beatHue = 0.3 * hWave + 0.15 * pulse.motion;
+    drv.hue = (drv.hue + dt * lerp(sndHue, beatHue)) % 1;
+    const beats = pulse.beatEvents - drv.seenBeats;
+    const hits = audio.onsetEvents - drv.seenOnsets;
+    drv.seenBeats = pulse.beatEvents;
+    drv.seenOnsets = audio.onsetEvents;
+    drv.beatEvents += controls.swap ? hits : beats;
+    // Bass thump: low bass reads as nothing, a hit as 1; it snaps up and lets go quickly.
+    const hit = Math.max(smooth01(clamp((audio.bass - 0.35) / 0.6, 0, 1)), audio.onset) * m;
+    drv.thump += (hit - drv.thump) * lerpK(dt, hit > drv.thump ? 0.02 : 0.12);
+  }
+
   // ======================================================================== modes
   function hsv(h, s, v) {
     const f = (n) => {
@@ -765,21 +1004,21 @@
       t: 0,
       shift: [0, 0, 0],
       update(dt) {
-        this.t += dt * (0.25 + 0.6 * pulse.energy + 0.5 * pulse.beat);
-        this.shift[0] += dt * (0.01 + 0.18 * audio.bass);
-        this.shift[1] += dt * (0.008 + 0.14 * audio.mid);
-        this.shift[2] += dt * (0.006 + 0.14 * audio.treble);
+        this.t += dt * (0.25 + 0.6 * drv.energy + 0.5 * drv.beat);
+        this.shift[0] += dt * (0.01 + 0.18 * drv.bass);
+        this.shift[1] += dt * (0.008 + 0.14 * drv.mid);
+        this.shift[2] += dt * (0.006 + 0.14 * drv.treble);
       },
       render(target, U) {
         const s = pulse.strength;
         draw(P['domain-warp'], {
           ...U,
           uWarpTime: this.t,
-          uWarpAmp: 1.4 + 0.8 * pulse.breath * (0.35 + 0.65 * s) + 0.6 * pulse.beat,
+          uWarpAmp: 1.4 + 0.8 * drv.breath * (0.35 + 0.65 * s) + 0.6 * drv.beat,
           uPaletteShift: [
-            this.shift[0] + 0.25 * audio.bass,
-            this.shift[1] + 0.2 * audio.mid,
-            this.shift[2] + 0.2 * audio.treble,
+            this.shift[0] + 0.25 * drv.bass,
+            this.shift[1] + 0.2 * drv.mid,
+            this.shift[2] + 0.2 * drv.treble,
           ],
         }, target);
       },
@@ -811,15 +1050,15 @@
           st.swap();
           this.needsInit = false;
         }
-        this.heat += (clamp(pulse.energy * 0.9 + pulse.beat * 0.3, 0, 1) - this.heat) * lerpK(dt, 2.5);
+        this.heat += (clamp(drv.energy * 0.9 + drv.beat * 0.3, 0, 1) - this.heat) * lerpK(dt, 2.5);
         // Calm = branching "coral" mycelium, hot = "mitosis" regime with dividing cells.
         const feed = 0.0545 + (0.0367 - 0.0545) * this.heat;
         const kill = 0.062 + (0.0649 - 0.062) * this.heat;
         // dt already includes the speed control, so slow motion also slows the simulation.
-        const steps = Math.round(clamp(6 + 16 * this.heat + 10 * pulse.beat, 4, 30) * clamp(dt * 60, 0, 2));
+        const steps = Math.round(clamp(6 + 16 * this.heat + 10 * drv.beat, 4, 30) * clamp(dt * 60, 0, 2));
 
-        let seeds = pulse.beatEvents - this.lastBeat;
-        this.lastBeat = pulse.beatEvents;
+        let seeds = drv.beatEvents - this.lastBeat;
+        this.lastBeat = drv.beatEvents;
         for (let i = 0; i < steps; i++) {
           let seed = [0, 0, 0];
           if (seeds > 0 && i === 0) {
@@ -829,7 +1068,7 @@
           draw(P['rd-sim'], { ...base, uState: st.read.tex, uInit: 0, uFeed: feed, uKill: kill, uSeed: seed }, st.write);
           st.swap();
         }
-        this.hue += dt * (0.02 + 0.12 * audio.mid);
+        this.hue += dt * (0.02 + 0.12 * drv.mid);
       },
       render(target, U) {
         draw(P['rd-display'], { ...U, uState: this.state.read.tex, uTexel: this.state.texel, uHue: this.hue }, target);
@@ -882,15 +1121,15 @@
         draw(P['fluid-curl'], { uVelocity: v.read.tex, uTexel: tx }, this.curl);
         draw(P['fluid-vorticity'], {
           uVelocity: v.read.tex, uCurl: this.curl.tex, uTexel: tx, uDt: dt,
-          uCurlStrength: 18 + 30 * pulse.energy,
+          uCurlStrength: 18 + 30 * drv.energy,
         }, v.write);
         v.swap();
 
         // Pulse = physical force: each beat pushes the fluid from rotating emitters. The push is
         // spread over ~0.1 s (`shove` decays) rather than landing in one frame, so it surges, not jolts.
-        this.spin += dt * (0.15 + 0.4 * pulse.energy);
-        const beats = pulse.beatEvents - this.lastBeat;
-        this.lastBeat = pulse.beatEvents;
+        this.spin += dt * (0.15 + 0.4 * drv.energy);
+        const beats = drv.beatEvents - this.lastBeat;
+        this.lastBeat = drv.beatEvents;
         const k = 3 + Math.min(pulse.active, 4);
         const emitter = (i) => {
           const a = this.spin + (i / k) * TAU;
@@ -908,7 +1147,7 @@
         if (this.shove > 0.02) {
           const share = this.shove * lerpK(dt, SHOVE_S); // this frame's part of the push
           this.shove -= share;
-          const force = (220 + 440 * pulse.energy + 220 * pulse.strength) * share; // the shares add up to one push per beat
+          const force = (220 + 440 * drv.energy + 220 * pulse.strength) * share; // the shares add up to one push per beat
           for (let i = 0; i < k; i++) {
             const { a, x, y } = emitter(i);
             const dir = a + Math.PI / 2 + 0.6;
@@ -916,7 +1155,7 @@
           }
         }
         // Breathing lung at the centre: radial in/out push.
-        const lung = pulse.breath * 70 * (0.4 + 0.6 * pulse.strength);
+        const lung = drv.breath * 70 * (0.4 + 0.6 * pulse.strength);
         for (let i = 0; i < 4; i++) {
           const a = (i / 4) * TAU + 0.785;
           this.splat(v, 0.5 + (Math.cos(a) * 0.08) / this.aspect, 0.5 + Math.sin(a) * 0.08,
@@ -924,22 +1163,23 @@
         }
 
         // Audio = dye: onsets drop vivid ink; strongest band picks the colour.
-        this.hue = (this.hue + dt * (0.03 + 0.1 * audio.mid)) % 1;
+        this.hue = (this.hue + dt * (0.03 + 0.1 * drv.mid)) % 1;
         const onsets = audio.onsetEvents - this.lastOnset;
         this.lastOnset = audio.onsetEvents;
-        if (onsets > 0 || (audio.level > 0.35 && Math.random() < audio.level * 0.25)) {
+        if (onsets > 0 || (drv.level > 0.35 && Math.random() < drv.level * 0.25)) {
           let best = 0;
           for (let i = 1; i < FFT_BINS; i++) if (audio.bins[i] > audio.bins[best]) best = i;
           const h = (this.hue + best / FFT_BINS) % 1;
-          const amt = onsets > 0 ? 0.9 + 0.8 * audio.bass : 0.35 * audio.level;
+          const amt = onsets > 0 ? 0.9 + 0.8 * drv.bass : 0.35 * drv.level;
           const x = 0.15 + Math.random() * 0.7;
           const y = 0.15 + Math.random() * 0.7;
-          this.splat(this.dye, x, y, hsv(h, 0.9, amt), 0.002 + 0.004 * audio.bass);
+          this.splat(this.dye, x, y, hsv(h, 0.9, amt), 0.002 + 0.004 * drv.bass);
           const a = Math.random() * TAU;
-          const f = 100 + 230 * audio.bass;
+          const f = 100 + 230 * drv.bass;
           this.splat(v, x, y, [Math.cos(a) * f, Math.sin(a) * f, 0], 0.003);
         }
         if (this.inject) this.inject(dt);
+        touchFluid(this, dt);
 
         draw(P['fluid-divergence'], { uVelocity: v.read.tex, uTexel: tx }, this.div);
         draw(P['fluid-scale'], { uSource: this.pressure.read.tex, uValue: 0.8 }, this.pressure.write);
@@ -957,7 +1197,7 @@
         v.swap();
         draw(P['fluid-advect'], {
           uVelocity: v.read.tex, uSource: this.dye.read.tex, uTexel: tx, uDt: dt,
-          uDissipation: 0.18 + 0.25 * (1 - audio.level),
+          uDissipation: 0.18 + 0.25 * (1 - drv.level),
         }, this.dye.write);
         this.dye.swap();
       },
@@ -969,14 +1209,14 @@
 
     // Shared Julia parameter motion: pulse drives the c constant, audio the hue.
     const stepJulia = (j, dt) => {
-      j.angle += dt * (0.03 + 0.12 * pulse.energy + 0.15 * pulse.beat);
+      j.angle += dt * (0.03 + 0.12 * drv.energy + 0.15 * drv.beat);
       j.rot += dt * 0.03;
-      j.hue += dt * (0.02 + 0.15 * audio.mid);
+      j.hue += dt * (0.02 + 0.15 * drv.mid);
     };
     const juliaUniforms = (j) => {
       const s = 0.35 + 0.65 * pulse.strength;
-      const a = j.angle + 0.16 * pulse.breath * s + 0.05 * pulse.wave;
-      const r = 0.7885 - 0.015 * pulse.beat + 0.008 * pulse.breath * s;
+      const a = j.angle + 0.16 * drv.breath * s + 0.05 * drv.wave;
+      const r = 0.7885 - 0.015 * drv.beat + 0.008 * drv.breath * s;
       return { uJuliaC: [r * Math.cos(a), r * Math.sin(a)], uJuliaRot: j.rot, uHue: j.hue };
     };
 
@@ -1013,7 +1253,7 @@
             uDye: f.dye.read.tex,
             uVelocity: f.vel.read.tex,
             uWarp: JF_WARP,
-            uInject: d * (0.6 + 1.2 * audio.level + 0.4 * pulse.beat),
+            uInject: d * (0.6 + 1.2 * drv.level + 0.4 * drv.beat),
           }, f.dye.write);
           f.dye.swap();
         };
@@ -1068,14 +1308,14 @@
       bands: 0,
       update(dt) {
         // Pulse = zoom velocity; each heartbeat surges the dive forward.
-        const vel = 0.07 + 0.32 * pulse.energy * (0.4 + 0.6 * pulse.strength) + 0.35 * pulse.beat;
+        const vel = 0.07 + 0.32 * drv.energy * (0.4 + 0.6 * pulse.strength) + 0.35 * drv.beat;
         this.logZoom += dt * vel;
         if (this.logZoom >= LOOP_AT + misOrbit.lnRho) {
           this.logZoom -= misOrbit.lnRho;
           this.wraps++;
         }
         this.rot += dt * 0.04;
-        this.bands += dt * (0.02 + 0.3 * audio.bass);
+        this.bands += dt * (0.02 + 0.3 * drv.bass);
       },
       render(target, U) {
         const L = this.logZoom;
@@ -1194,7 +1434,7 @@
         this.t += dt;
         // Geometry breathes slowly with the room. Any change reshapes the whole fractal around the
         // camera, so it ignores single beats and eases in over seconds.
-        const sGoal = 1.12 + 0.04 * pulse.breath * (0.4 + 0.6 * pulse.strength);
+        const sGoal = 1.12 + 0.04 * drv.breath * (0.4 + 0.6 * pulse.strength);
         this.fracS += (sGoal - this.fracS) * lerpK(dt, 2.5);
 
         // Steering: aim at the most open direction (re-checked a few times a second) and away from
@@ -1225,12 +1465,12 @@
         // Speed scales with the open space around the camera, so the flow looks the same in tight gaps
         // and big chambers and there is always time to steer. Never step further than the wall.
         this.room += (d - this.room) * lerpK(dt, 0.5);
-        const rate = 1.2 + 3 * pulse.energy * (0.4 + 0.6 * pulse.strength) + 1.5 * pulse.beat; // ~gaps per second
+        const rate = 1.2 + 3 * drv.energy * (0.4 + 0.6 * pulse.strength) + 1.5 * drv.beat; // ~gaps per second
         this.speed += (this.room * rate - this.speed) * lerpK(dt, 0.8);
         const step = Math.min(this.speed * dt, Math.max(d * 0.6, 0.0002));
         for (let i = 0; i < 3; i++) p[i] = fract((p[i] + this.fwd[i] * step + 1) / 2) * 2 - 1;
-        this.roll += dt * (0.04 + 0.1 * audio.mid) * Math.sin(this.t * 0.05);
-        this.hue += dt * (0.015 + 0.08 * audio.mid);
+        this.roll += dt * (0.04 + 0.1 * drv.mid) * Math.sin(this.t * 0.05);
+        this.hue += dt * (0.015 + 0.08 * drv.mid);
       },
       render(target, U) {
         draw(P.fractal3d, {
@@ -1286,8 +1526,10 @@
     { id: 'bloom', label: 'Bloom', key: 'b' },
     { id: 'ripple', label: 'Heart Ripple', key: 'r' },
     { id: 'hearts', label: 'Hearts', key: 't' },
+    { id: 'invert', label: 'Invert', key: 'i' },
+    { id: 'swap', label: 'Music → Motion', key: 'x' },
   ];
-  const fx = { kaleido: false, echo: false, bloom: false, ripple: false, hearts: true };
+  const fx = { kaleido: false, echo: false, bloom: false, ripple: false, hearts: true, invert: false, swap: false };
   try {
     Object.assign(fx, JSON.parse(localStorage.getItem('pulse.fx') || '{}'));
   } catch (_) { /* ignore */ }
@@ -1303,6 +1545,18 @@
     if (share) setControl({ [id]: on });
   }
   const toggleFx = (id) => setFx(id, !fx[id]);
+
+  // One gradient across the whole group: each selected button's underline shows its own slice.
+  function spanGradient(group) {
+    const place = () => {
+      group.style.setProperty('--span-w', `${group.clientWidth}px`);
+      for (const el of group.children) el.style.setProperty('--span-x', `${-el.offsetLeft}px`);
+    };
+    new ResizeObserver(place).observe(group);
+    new MutationObserver(place).observe(group, { childList: true });
+    document.fonts.ready.then(place);
+    place();
+  }
 
   function buildFxBar() {
     const nav = $('fxBar');
@@ -1320,6 +1574,7 @@
       b.addEventListener('click', () => toggleFx(d.id));
       nav.appendChild(b);
     }
+    spanGradient(nav);
   }
 
   function clearTarget(t) {
@@ -1330,35 +1585,43 @@
   }
 
   /** Runs the enabled post-processing chain: scene -> kaleido/ripples/bursts -> echo -> bloom -> screen. */
-  function runFx(dt, U, heartCount, burstCount) {
+  function runFx(dt, U, heartCount, burstCount, paintOn) {
     const P = programs;
     let src = view.rtScene;
 
     // Each heartbeat launches a shockwave ring (up to 4 alive at once).
     const beats = pulse.beatEvents - fxState.lastBeat;
     fxState.lastBeat = pulse.beatEvents;
-    if (beats > 0) fxState.ripples.unshift(0);
+    // Rings start only while Heart Ripple is on, so switching it on doesn't release ones queued while it was off.
+    if (beats > 0 && fx.ripple) fxState.ripples.unshift(0);
     fxState.ripples = fxState.ripples.map((a) => a + dt).filter((a) => a < 2.2).slice(0, 4);
-    fxState.kRot += dt * (0.05 + 0.25 * pulse.energy);
-    const hueRotate = ctl.hue * TAU;
+    fxState.kRot += dt * (0.05 + 0.25 * drv.energy);
+    const hueRotate = (ctl.hue + drv.hue) * TAU;
 
-    const chaosFx = ctl.warp > 0.001 || ctl.punch > 0.001 || ctl.glitch > 0.001;
-    if (fx.kaleido || fx.ripple || burstCount > 0 || chaosFx) {
+    const chaosFx = ctl.warp > 0.001 || ctl.punch > 0.001 || ctl.glitch > 0.001 || drv.thump > 0.002;
+    const smudgeCount = smudgeUniforms();
+    const roomPre = smudgeCount > 0 || Math.abs(room.pan[0]) + Math.abs(room.pan[1]) > 0.002 || room.charge > 0.005;
+    if (fx.kaleido || fx.ripple || burstCount > 0 || chaosFx || roomPre) {
       const r = fxState.ripples;
       draw(P['fx-pre'], {
         ...U,
         uSrc: src.tex,
         uKaleido: fx.kaleido ? 1 : 0,
         uSegments: 6 + 2 * Math.round(controls.chaos * 2), // 6, 8 or 10 slices; changes only when Chaos is moved
-        uKRot: fxState.kRot + 0.25 * pulse.breath,
-        uKZoom: 1.0 - 0.12 * pulse.breath * (0.4 + 0.6 * pulse.strength),
+        uKRot: fxState.kRot + 0.25 * drv.breath,
+        uKZoom: 1.0 - 0.12 * drv.breath * (0.4 + 0.6 * pulse.strength),
         uRipple: fx.ripple ? 1 : 0,
         uRipples: [0, 1, 2, 3].map((i) => (i < r.length ? r[i] : -1)),
         uBurstCount: burstCount,
         uBursts: burstData,
         uWarp: ctl.warp,
-        uPunch: ctl.punch * pulse.beat * 0.12,
-        uSplit: ctl.glitch * (0.012 * pulse.beat + 0.02 * audio.onset),
+        uPunch: ctl.punch * drv.beat * 0.12 + 0.09 * drv.thump, // bass thump zooms in when swapped
+        uSplit: ctl.glitch * (0.012 * drv.beat + 0.02 * drv.onset),
+        uSmudgeCount: smudgeCount,
+        uSmudges: smudgeData,
+        uSmudgeAge: smudgeAge,
+        uPan: [room.pan[0] * 2, -room.pan[1] * 2],
+        uCharge: room.charge,
       }, view.rtPre);
       src = view.rtPre;
     }
@@ -1374,10 +1637,10 @@
         uSrc: src.tex,
         uPrev: view.fb.read.tex,
         // Faster hearts = shorter, snappier trails; beats surge the zoom like a camera push.
-        uDecay: clamp(0.93 - 0.05 * pulse.energy, 0.85, 0.94),
-        uZoom: 1.004 + 0.02 * pulse.beat + 0.004 * audio.bass,
-        uRot: 0.0025 * pulse.breath + 0.002 * audio.mid,
-        uHueShift: 0.015 + 0.04 * audio.treble,
+        uDecay: clamp(0.93 - 0.05 * drv.energy, 0.85, 0.94),
+        uZoom: 1.004 + 0.02 * drv.beat + 0.004 * drv.bass,
+        uRot: 0.0025 * drv.breath + 0.002 * drv.mid,
+        uHueShift: 0.015 + 0.04 * drv.treble,
       }, view.fb.write);
       view.fb.swap();
       src = view.fb.read;
@@ -1387,12 +1650,12 @@
     if (fx.bloom || ctl.bloomBoost > 0.01) {
       const tx = 1 / view.bloomA.w;
       const ty = 1 / view.bloomA.h;
-      draw(P['fx-bright'], { uSrc: src.tex, uThreshold: 0.68 - 0.12 * audio.level }, view.bloomA);
+      draw(P['fx-bright'], { uSrc: src.tex, uThreshold: 0.68 - 0.12 * drv.level }, view.bloomA);
       for (const spread of [1.0, 2.2]) {
         draw(P['fx-blur'], { uSrc: view.bloomA.tex, uDir: [tx * spread, 0] }, view.bloomB);
         draw(P['fx-blur'], { uSrc: view.bloomB.tex, uDir: [0, ty * spread] }, view.bloomA);
       }
-      bloomAmt = (fx.bloom ? 0.3 + 0.8 * audio.level + 0.3 * pulse.beat : 0) + ctl.bloomBoost * (0.7 + 0.5 * audio.level);
+      bloomAmt = (fx.bloom ? 0.3 + 0.8 * drv.level + 0.3 * drv.beat : 0) + ctl.bloomBoost * (0.7 + 0.5 * drv.level);
     }
 
     draw(P['fx-final'], {
@@ -1408,6 +1671,12 @@
       uBurstCount: burstCount,
       uBursts: burstData,
       uBurstHue: burstHue,
+      uPaint: paintOn ? paint.layer.read.tex : view.bloomA.tex,
+      uPaintOn: paintOn ? 1 : 0,
+      uCharge: room.charge,
+      uRace: [room.raceOn, room.raceSplit, ...(room.game.hues || [0, 0.62])],
+      uPass: [room.passOn, room.passHue],
+      uInvert: fx.invert ? 1 : 0,
     }, null);
   }
 
@@ -1459,6 +1728,7 @@
       nav.appendChild(b);
     });
     nav.children[current].classList.add('active');
+    spanGradient(nav);
   }
 
   let lastT = performance.now();
@@ -1478,8 +1748,10 @@
     updateControls(dt);
     updatePulse(dt, now);
     updateAudio(dt);
+    updateDrive(dt);
     // Animation time runs at the speed control's rate; the heartbeat itself keeps real time.
-    const sdt = dt * ctl.speed;
+    // Swapped, every bass hit also surges the animation forward (up to ~3x for a moment).
+    const sdt = dt * ctl.speed * (1 + 2 * drv.thump);
     animTime += sdt;
 
     gl.bindTexture(gl.TEXTURE_2D, fftTex);
@@ -1489,17 +1761,17 @@
       uRes: [canvas.width, canvas.height],
       uTime: animTime,
       uBpm: pulse.bpm,
-      uPulse: pulse.wave,
-      uBeat: pulse.beat,
-      uBreath: pulse.breath,
-      uEnergy: pulse.energy,
+      uPulse: drv.wave,
+      uBeat: drv.beat,
+      uBreath: drv.breath,
+      uEnergy: drv.energy,
       uStrength: pulse.strength,
       uUsers: pulse.active,
-      uBass: audio.bass,
-      uMid: audio.mid,
-      uTreble: audio.treble,
-      uLevel: audio.level,
-      uOnset: audio.onset,
+      uBass: drv.bass,
+      uMid: drv.mid,
+      uTreble: drv.treble,
+      uLevel: drv.level,
+      uOnset: drv.onset,
       uFFT: fftTex,
     };
 
@@ -1508,8 +1780,11 @@
     const heartCount = heartUniforms(dt);
     const showHearts = fx.hearts && heartCount > 0;
     const burstCount = burstUniforms(dt);
-    const looks = ctl.hue > 0.002 || Math.abs(ctl.exposure - 1) > 0.01 || Math.abs(ctl.saturation - 1) > 0.01 || ctl.warp > 0.001 || ctl.punch > 0.001 || ctl.glitch > 0.001;
-    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || burstCount > 0 || looks;
+    updateRoom(dt);
+    const paintOn = updatePaint(dt);
+    const looks = ctl.hue > 0.002 || drv.hue > 0.002 || fx.invert || Math.abs(ctl.exposure - 1) > 0.01 || Math.abs(ctl.saturation - 1) > 0.01 || ctl.warp > 0.001 || ctl.punch > 0.001 || ctl.glitch > 0.001;
+    const play = paintOn || smudges.length > 0 || Math.abs(room.pan[0]) + Math.abs(room.pan[1]) > 0.002 || room.charge > 0.005 || room.raceOn > 0.01 || room.passOn > 0.01;
+    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || burstCount > 0 || looks || play;
     // With FX enabled the mode renders off-screen and the FX chain composites to the screen.
     const sceneTarget = fxOn ? view.rtScene : null;
     if (fade < 1 && previous >= 0) {
@@ -1525,7 +1800,10 @@
       cur.update(sdt, U);
       cur.render(sceneTarget, U);
     }
-    if (fxOn) runFx(sdt, U, showHearts ? heartCount : 0, burstCount);
+    if (fxOn) runFx(sdt, U, showHearts ? heartCount : 0, burstCount, paintOn);
+    // Drags and blasts are used up by this frame's fluid and paint passes.
+    strokes.length = 0;
+    room.blast = 0;
 
     hudTimer += dt;
     if (hudTimer > 0.25) {
@@ -1543,23 +1821,25 @@
     const bw = w / FFT_BINS;
     for (let i = 0; i < FFT_BINS; i++) {
       const v = audio.bins[i] / 255;
-      spec.fillStyle = `hsl(${300 - i * 3}, 90%, ${45 + v * 25}%)`;
-      spec.fillRect(i * bw, h - v * h, bw - 0.5, v * h);
+      // Red (bass) through green to blue (treble) across the spectrum.
+      // A 2 px floor keeps a gradient line visible in silence, so the spectrum still reads as a button.
+      const bh = Math.max(2, v * h);
+      spec.fillStyle = `hsl(${(i / (FFT_BINS - 1)) * 240} 100% 55% / ${0.45 + v * 0.55})`;
+      spec.fillRect(i * bw, h - bh, bw - 0.5, bh);
     }
   }
 
   function updateHud() {
     $('hudBpm').textContent = !controls.heartbeat || pulse.source !== 'tempo' ? Math.round(pulse.bpm) : '--';
-    $('hudMode').textContent = !controls.heartbeat ? 'BPM · manual' : pulse.source === 'music' ? 'BPM · ♪ music' : pulse.source === 'phones' ? 'BPM · phones' : 'BPM';
+    $('hudMode').textContent = !controls.heartbeat ? 'BPM · manual' : pulse.source === 'music' ? 'BPM · music' : pulse.source === 'phones' ? 'BPM · phones' : 'BPM';
     $('hudUsers').textContent = pulse.sensors;
-    $('hudFps').textContent = `${Math.round(1000 / view.frameMs)} fps · ${Math.round(view.scale * 100)}%`;
   }
 
   // ---- Live beat on/off (shared): off = phones and music are ignored and the tempo control sets the rhythm.
   function updateHeartbeatUi() {
     const on = controls.heartbeat;
     const b = $('hbBtn');
-    b.textContent = on ? '♥ Live beat' : '♡ Manual tempo';
+    b.textContent = on ? 'Live beat' : 'Manual tempo';
     b.classList.toggle('off', !on);
     b.title = on
       ? 'Phones (taps, dancing, hearts) drive the rhythm, then the music\'s beat. Click (M) for manual tempo.'
@@ -1570,9 +1850,9 @@
 
   // ---- Host lock: what phones may change. Click cycles open -> sliders only -> locked.
   const LOCK_UI = {
-    open: { text: '🔓 Phones: all', next: 'limited' },
-    limited: { text: '🔒 Phones: sliders', next: 'locked' },
-    locked: { text: '🔒 Phones: none', next: 'open' },
+    open: { text: 'Phones: all', next: 'limited' },
+    limited: { text: 'Phones: sliders', next: 'locked' },
+    locked: { text: 'Phones: none', next: 'open' },
   };
   function updateLockUi() {
     const b = $('lockBtn');
@@ -1620,9 +1900,7 @@
     else if (e.key === 'ArrowRight') setMode(current + 1);
     else if (e.key === 'ArrowLeft') setMode(current - 1);
     else if (e.key === 'h' || e.key === 'H') ui.classList.toggle('hidden');
-    else if (e.key === 'v' || e.key === 'V') toggleDock();
     else if (e.key === 'q' || e.key === 'Q') $('qrCorner').hidden = !$('qrCorner').hidden;
-    else if (e.key === 'p' || e.key === 'P') togglePlay();
     else if (e.key === 'm' || e.key === 'M') toggleHeartbeat();
     else if (e.key === 'f' || e.key === 'F') {
       if (document.fullscreenElement) document.exitFullscreen();
@@ -1633,86 +1911,14 @@
     }
   });
 
-  // ---- Shared media (YouTube or uploaded file), locked to the server clock
-  let ytState = null;
-  const yt = new MediaSync('player', socket, timeSync, {
-    muted: false,
-    mediaElement: $('filePlayer'),
-    spotifyElement: $('spotifyWrap'),
-    shield: $('shield'),
-    reportSpotifyDuration: true,
-    onStatus: (s) => {
-      if (s.error) $('nowPlaying').textContent = s.error;
-      else if (!s.kind) $('nowPlaying').textContent = 'nothing playing';
-      else if (s.note) $('nowPlaying').textContent = s.note;
-      // Spotify sometimes refuses to start on its own; its play button is clickable then.
-      else if (s.kind === 'spotify' && yt.blocked) $('nowPlaying').textContent = 'Click ▶ in the Spotify player to start';
-      else {
-        const sec = Math.floor(s.position || 0);
-        $('nowPlaying').textContent = `${s.playing ? '▶' : '❚❚'} ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')} · ${s.title}`;
-      }
-      $('playPause').textContent = s.playing ? '❚❚' : '▶';
-      $('spotifyLogin').hidden = !s.previewEnded;
-    },
-  });
-
-  // Logged-out browsers only get 30 s Spotify previews. Log in in a new tab; when this tab gets
-  // focus back, the embed is rebuilt so it picks up the login (no reload, so audio capture stays).
-  let spotifyLoginPending = false;
-  $('spotifyLogin').addEventListener('click', () => {
-    window.open('https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F', '_blank', 'noopener');
-    spotifyLoginPending = true;
-  });
-  window.addEventListener('focus', () => {
-    if (!spotifyLoginPending) return;
-    spotifyLoginPending = false;
-    yt.reloadSpotify();
-  });
-  socket.on('yt:state', (s) => (ytState = s));
-  const linkSource = sourcePicker([...document.querySelectorAll('.src-toggle button')], $('ytUrl'));
-
-  $('mediaFile').addEventListener('change', async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-    yt.unlock();
-    try {
-      await uploadMedia(file, (p) => ($('nowPlaying').textContent = `uploading ${Math.round(p * 100)}%…`));
-    } catch (err) {
-      $('nowPlaying').textContent = err.message;
-    }
-  });
-
-  function togglePlay() {
-    const exp = yt.expected();
-    socket.emit('yt:control', exp && exp.playing ? 'pause' : 'play');
-  }
-  function toggleDock() {
-    const c = $('dock').classList.toggle('collapsed');
-    $('dockToggle').textContent = c ? '▴' : '▾';
-  }
-  $('playPause').addEventListener('click', () => { yt.unlock(); togglePlay(); });
-  $('restart').addEventListener('click', () => socket.emit('yt:control', 'restart'));
-  $('dockToggle').addEventListener('click', toggleDock);
-  $('ytForm').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const url = $('ytUrl').value.trim();
-    if (!url) return;
-    yt.unlock();
-    socket.timeout(5000).emit('media:submit', { source: linkSource(), url }, (err, res) => {
-      if (err || !res.ok) $('nowPlaying').textContent = err ? 'server timeout' : res.error;
-      else $('ytUrl').value = '';
-    });
-  });
-
   // ---- audio source controls
   async function tryConnectAudio() {
-    setAudioStatus('connecting…');
+    setAudioStatus('');
     try {
       await connectAudio();
     } catch (err) {
       disconnectAudio();
-      setAudioStatus(err && err.name === 'NotAllowedError' ? 'no audio: click 🔊 System audio to share it' : (err.message || 'audio failed'));
+      setAudioStatus(err && err.name === 'NotAllowedError' ? 'No audio shared. Click the spectrum, choose Entire screen and tick Also share system audio.' : (err.message || 'audio failed'));
     }
   }
   $('audioBtn').addEventListener('click', tryConnectAudio);
@@ -1750,18 +1956,12 @@
   $('startBtn').addEventListener('click', async () => {
     $('start').hidden = true;
     poke();
-    // Inside the click gesture: create/resume the AudioContext and route uploaded media through it.
+    // Inside the click gesture: create/resume the AudioContext.
     ensureAudioContext();
-    try {
-      connectFileAudio();
-    } catch (err) {
-      console.warn('File audio analysis unavailable', err);
-    }
     audio.ctx.resume();
-    yt.unlock();
     await tryConnectAudio();
   });
 
   // Expose for debugging in DevTools.
-  window.__pulse = { pulse, audio, view, fx, toggleFx, controls, ctl, setControl, media: yt, renderFrame: (t) => renderFrame(t), setMode, get modes() { return modes; }, get programs() { return programs; }, gl, get ytState() { return ytState; } };
+  window.__pulse = { pulse, audio, drv, view, fx, toggleFx, controls, ctl, setControl, renderFrame: (t) => renderFrame(t), setMode, get modes() { return modes; }, get programs() { return programs; }, gl };
 })();

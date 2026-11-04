@@ -1,5 +1,5 @@
 // FX: Chaos (zoom punch, warp, RGB split) + kaleidoscope + heartbeat shockwave ripples + touch pad
-// bursts (a UV remap of the rendered scene).
+// bursts and smudges + room tilt and hold-together charge (a UV remap of the rendered scene).
 uniform sampler2D uSrc;
 uniform float uKaleido;
 uniform float uSegments;
@@ -12,12 +12,31 @@ uniform int uBurstCount;
 uniform float uWarp;  // Chaos: 0..1 swirl and wobble
 uniform float uPunch; // Chaos: zoom-in amount right now (pulses on beats)
 uniform float uSplit; // Chaos: RGB split distance (flashes on beats and bass hits)
+uniform vec4 uSmudges[16]; // stir drags: xy = spot (aspectUv space), zw = finger velocity (per s)
+uniform float uSmudgeAge[16];
+uniform int uSmudgeCount;
+uniform vec2 uPan;    // room tilt: the picture slides this far
+uniform float uCharge; // hold together: 0..1, the picture tightens and trembles
 
 void main() {
   vec2 asp = vec2(uRes.x / uRes.y, 1.0);
   vec2 p = (vUv - 0.5) * 2.0 * asp;
   float ring = 0.0;
   vec2 screen = p; // where on the screen this pixel is (touch bursts are placed in screen space)
+
+  // Stir: each drag pulls the picture along with the finger, fading over about a second.
+  for (int i = 0; i < 16; i++) {
+    if (i >= uSmudgeCount) break;
+    vec4 s = uSmudges[i];
+    vec2 dv = screen - s.xy;
+    float w = exp(-dot(dv, dv) / 0.06) * exp(-uSmudgeAge[i] * 2.5);
+    p -= clamp(s.zw * 0.05, vec2(-0.25), vec2(0.25)) * w;
+  }
+  p -= uPan;
+  if (uCharge > 0.0) {
+    p *= 1.0 - 0.08 * uCharge;
+    p += uCharge * uCharge * 0.012 * vec2(sin(uTime * 61.0), cos(uTime * 53.0));
+  }
 
   // Chaos: punch in on the beat, then swirl (stronger toward the middle) and wobble the image.
   p *= 1.0 - uPunch;

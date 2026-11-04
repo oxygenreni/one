@@ -9,7 +9,10 @@ const { io: ioc } = require('socket.io-client');
 
 const tmpUploads = fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-uploads-'));
 process.env.UPLOAD_DIR = tmpUploads;
-const { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, ANIM_DEFS, canChange } = require('../server.js');
+const {
+  createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, CrowdHold, TapRace, PassColour,
+  ANIM_DEFS, canChange,
+} = require('../server.js');
 
 test.after(() => fs.rmSync(tmpUploads, { recursive: true, force: true }));
 
@@ -456,4 +459,123 @@ test('PulseAggregator averages dancers\' movement energy and counts taps as beat
   assert.equal(a.sensors, 5);
   assert.deepEqual(a.hearts.map((h) => h[0]), [5], 'only heart-camera phones get a ring');
   assert.equal(a.active, 2, 'only phones with a BPM set the tempo');
+});
+
+test('CrowdHold charges while enough phones hold, and blasts when they let go', () => {
+  const h = new CrowdHold();
+  assert.equal(CrowdHold.need(2), 2);
+  assert.equal(CrowdHold.need(9), 5);
+  assert.equal(CrowdHold.need(40), 8);
+  h.set('a', true);
+  let s = h.tick(1, 4);
+  assert.equal(s.holders, 1);
+  assert.equal(s.charge, 0, 'one of two needed does not charge');
+  h.set('b', true);
+  s = h.tick(2, 4);
+  assert.equal(s.charge, 0.5);
+  assert.equal(s.release, 0);
+  h.set('a', false);
+  s = h.tick(0.1, 4);
+  assert.equal(s.release, 0.5, 'letting go releases the charge');
+  assert.equal(s.charge, 0);
+  // A short hold fizzles out instead of blasting.
+  h.set('a', true);
+  h.tick(0.2, 4);
+  h.remove('b');
+  s = h.tick(0.1, 4);
+  assert.equal(s.release, 0);
+});
+
+test('TapRace splits teams, counts taps only while live, and names the winner', () => {
+  const players = [{ id: 'a', n: 1 }, { id: 'b', n: 2 }, { id: 'c', n: 3 }];
+  const r = new TapRace(players, 0);
+  assert.equal(r.snapshot(0).phase, 'countdown');
+  assert.deepEqual(r.snapshot(0).teams, { 1: 0, 2: 1, 3: 0 });
+  r.tap(players[1], 1000);
+  assert.deepEqual(r.score, [0, 0], 'countdown taps do not count');
+  r.tap(players[1], 3500);
+  r.tap(players[1], 3600);
+  r.tap(players[0], 3700);
+  r.tap({ id: 'd', n: 4 }, 3800); // late joiner goes to the smaller team (blue)
+  assert.deepEqual(r.score, [1, 3]);
+  r.tap(players[0], 18500);
+  const done = r.snapshot(18500);
+  assert.equal(done.phase, 'done');
+  assert.equal(done.winner, 1);
+  assert.ok(!r.finished(20000));
+  assert.ok(r.finished(23000));
+});
+
+test('PassColour moves the colour on a timer and when its holder leaves', () => {
+  let players = [{ id: 'a', n: 1, hue: 0.1 }, { id: 'b', n: 2, hue: 0.7 }];
+  const p = new PassColour(players, 0, () => 0);
+  assert.equal(p.snapshot(0).holder, 1);
+  assert.equal(p.tick(players, 1000), false);
+  assert.equal(p.tick(players, 6000), true);
+  assert.equal(p.snapshot(6000).holder, 2, 'passes to someone else');
+  players = players.slice(0, 1);
+  assert.equal(p.tick(players, 7000), true);
+  assert.equal(p.snapshot(7000).holder, 1);
+  assert.ok(p.finished(60000));
+});
+
+test('socket flow: stir drags, hold together, tilt and games', async (t) => {
+  const { server, io } = createApp({ hostPin: '424242' });
+  await new Promise((r) => server.listen(0, r));
+  const url = `http://localhost:${server.address().port}`;
+  const clients = [];
+  t.after(() => {
+    clients.forEach((c) => c.close());
+    io.close();
+    server.close();
+  });
+  const connect = (role) =>
+    new Promise((resolve) => {
+      const c = ioc(url, { transports: ['websocket'], forceNew: true, extraHeaders: role === 'input' ? { 'cf-connecting-ip': '203.0.113.9' } : {} });
+      clients.push(c);
+      c.once('host:status', () => resolve(c));
+      c.on('connect', () => c.emit('hello', { role }));
+    });
+  const next = (c, ev, pred = () => true) => new Promise((resolve) => c.on(ev, (m) => pred(m) && resolve(m)));
+
+  const display = await connect('output');
+  const a = await connect('input');
+  const b = await connect('input');
+
+  const drag = next(display, 'touch:fx', (m) => m.d === 1);
+  a.emit('touch', { x: 0.5, y: 0.5, drag: true, vx: 99, vy: -2, tool: 'paint' });
+  const d = await drag;
+  assert.equal(d.vx, 30, 'finger speed is clamped');
+  assert.equal(d.vy, -2);
+  assert.equal(d.p, 1);
+
+  const tilt = next(display, 'tilt:agg', (m) => m.n === 2);
+  a.emit('tilt', { x: 0.5, y: -1 });
+  b.emit('tilt', { x: -0.1, y: 5 });
+  const agg = await tilt;
+  assert.ok(Math.abs(agg.x - 0.2) < 1e-9);
+  assert.equal(agg.y, 0);
+
+  const charging = next(display, 'crowd:hold', (m) => m.charge > 0);
+  a.emit('touch:hold', true);
+  b.emit('touch:hold', true);
+  assert.equal((await charging).need, 2);
+  await new Promise((r) => setTimeout(r, 700));
+  const blast = next(b, 'crowd:release');
+  a.emit('touch:hold', false);
+  assert.ok((await blast).power >= 0.15);
+
+  const unknown = await new Promise((r) => display.emit('game:start', 'nope', r));
+  assert.equal(unknown.ok, false);
+  const started = next(b, 'game:state', (s) => s.kind === 'race');
+  const res = await new Promise((r) => a.emit('game:start', 'race', r));
+  assert.equal(res.ok, true);
+  const race = await started;
+  assert.equal(race.phase, 'countdown');
+  assert.equal(Object.keys(race.teams).length, 2);
+  const again = await new Promise((r) => b.emit('game:start', 'pass', r));
+  assert.equal(again.ok, false, 'one game at a time');
+  const stopped = next(display, 'game:state', (s) => s.kind === null);
+  b.emit('game:stop');
+  await stopped;
 });

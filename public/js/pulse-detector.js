@@ -9,7 +9,13 @@
 
   const MIN_IBI = 60 / 200; // 200 BPM
   const MAX_IBI = 60 / 40;  // 40 BPM
-  const WARMUP_S = 1.5;
+  // While the camera's auto-exposure settles after the finger lands, the baseline tracks fast;
+  // the envelope is then re-seeded so that swing doesn't drown the first real beats.
+  const WARMUP_S = 1.0;
+  const WARMUP_TAU = 0.12;
+  const BASE_TAU = 0.25;
+  // Brief contact dropouts (a finger shifting) keep the lock instead of starting over.
+  const CONTACT_GRACE_S = 0.5;
 
   function median(arr) {
     const s = arr.slice().sort((a, b) => a - b);
@@ -39,6 +45,8 @@
       this.bpm = 0;
       this.confidence = 0;
       this.contactSince = null;
+      this.lostSince = null;
+      this.warm = false;
       this.pendingBeat = false;
       this.beatCount = 0;
     }
@@ -51,9 +59,12 @@
     addSample(value, tMs, contact = true) {
       const t = tMs / 1000;
       if (!contact || !Number.isFinite(value)) {
-        if (this.contactSince !== null) this.reset();
+        if (this.contactSince === null) return this.signal;
+        if (this.lostSince === null) this.lostSince = t;
+        if (t - this.lostSince >= CONTACT_GRACE_S) this.reset();
         return this.signal;
       }
+      this.lostSince = null;
       if (this.contactSince === null) this.contactSince = t;
 
       if (this.lastT === null || t <= this.lastT || t - this.lastT > 0.5) {
@@ -69,9 +80,15 @@
 
       // Two cascaded high-pass stages: a single EMA detrend leaves a constant offset on
       // linear drift (auto-exposure, finger pressure); the second stage removes it.
-      this.base += (value - this.base) * (1 - Math.exp(-dt / 0.6));
+      const warmedUp = t - this.contactSince > WARMUP_S;
+      if (warmedUp && !this.warm) {
+        this.warm = true;
+        this.env = 1e-3;
+      }
+      const tau = warmedUp ? BASE_TAU : WARMUP_TAU;
+      this.base += (value - this.base) * (1 - Math.exp(-dt / tau));
       const hp1 = value - this.base;
-      this.base2 += (hp1 - this.base2) * (1 - Math.exp(-dt / 0.6));
+      this.base2 += (hp1 - this.base2) * (1 - Math.exp(-dt / tau));
       const hp = hp1 - this.base2;
       this.lp += (hp - this.lp) * (1 - Math.exp(-dt / 0.06));
       const s = -this.lp; // more blood => more absorption => darker frame
@@ -84,7 +101,6 @@
 
       // Hysteresis peak picking: arm above HIGH, track the maximum, commit when falling below LOW.
       // Far more robust to sensor noise than looking for slope sign changes.
-      const warmedUp = t - this.contactSince > WARMUP_S;
       if (!this.armed) {
         if (warmedUp && norm > 0.45) {
           this.armed = true;
@@ -138,10 +154,18 @@
       if (n < 2) return;
       const m = median(this.ibis);
       this.bpm = 60 / m;
-      const mean = this.ibis.reduce((a, b) => a + b, 0) / n;
-      const variance = this.ibis.reduce((a, b) => a + (b - mean) * (b - mean), 0) / n;
+      // Score steadiness on the intervals near the median, so one missed or doubled beat
+      // costs a little confidence instead of zeroing it until it leaves the window.
+      const ok = this.ibis.filter((x) => Math.abs(x - m) / m < 0.25);
+      const k = ok.length;
+      if (k < 2) {
+        this.confidence = 0;
+        return;
+      }
+      const mean = ok.reduce((a, b) => a + b, 0) / k;
+      const variance = ok.reduce((a, b) => a + (b - mean) * (b - mean), 0) / k;
       const cv = Math.sqrt(variance) / mean;
-      this.confidence = Math.min(1, n / 4) * Math.max(0, Math.min(1, 1 - cv * 4));
+      this.confidence = Math.min(1, k / 4) * (k / n) * Math.max(0, Math.min(1, 1 - cv * 4));
     }
 
     /** Returns true once per detected beat. */

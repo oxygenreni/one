@@ -11,17 +11,8 @@
     sensorStatus: $('sensorStatus'),
     sensorBtn: $('sensorBtn'),
     flashBtn: $('flashBtn'),
-    diagLog: $('diagLog'),
     roomBpm: $('roomBpm'),
     roomSensors: $('roomSensors'),
-    roomDisplays: $('roomDisplays'),
-    ytForm: $('ytForm'),
-    ytUrl: $('ytUrl'),
-    ytMsg: $('ytMsg'),
-    ytStatus: $('ytStatus'),
-    ytEmpty: $('ytEmpty'),
-    tapSync: $('tapSync'),
-    soundBtn: $('soundBtn'),
     cam: $('cam'),
     sample: $('sample'),
   };
@@ -47,7 +38,6 @@
   socket.on('pulse:summary', (s) => {
     ui.roomBpm.textContent = s.bpm > 0 ? s.bpm : '--';
     ui.roomSensors.textContent = s.sensors;
-    ui.roomDisplays.textContent = s.displays;
     roomSensing = s.bpm > 0;
     renderAnim();
   });
@@ -62,6 +52,7 @@
 
   // Each phone gets its own colour; its beats show as rings of that colour on the display.
   socket.on('you', (me) => {
+    myN = me.n;
     const color = `hsl(${Math.round(me.hue * 360)}, 90%, 62%)`;
     ui.heart.style.color = color;
     $('youColor').hidden = false;
@@ -70,103 +61,17 @@
     $('tapBtn').style.setProperty('--me', color);
   });
 
-  // ---------------------------------------------------------------- shared media (locked to server)
-  const yt = new MediaSync('player', socket, timeSync, {
-    muted: true,
-    mediaElement: $('filePlayer'),
-    spotifyElement: $('spotifyWrap'),
-    shield: $('shield'),
-    onBlocked: (b) => (ui.tapSync.hidden = !b),
-    onStatus: (s) => {
-      // Audio files, and Spotify while this phone is muted (the embed can't be muted), show a title card.
-      const card = (s.kind === 'file' && s.mime && s.mime.startsWith('audio/')) || (s.kind === 'spotify' && !!s.note);
-      $('audioOnly').hidden = !card;
-      if (card) $('audioTitle').textContent = s.title || '';
-      if (s.error) {
-        ui.ytStatus.textContent = s.error;
-        return;
-      }
-      ui.ytEmpty.hidden = !!s.kind;
-      if (!s.kind) {
-        ui.ytStatus.textContent = 'nothing playing';
-        return;
-      }
-      if (s.note) {
-        ui.ytStatus.textContent = s.note;
-        return;
-      }
-      const t = formatTime(s.position);
-      const name = s.kind === 'youtube' ? '' : ` · ${s.title}`;
-      ui.ytStatus.textContent = `${s.playing ? '▶' : '❚❚'} ${t}${name} · synced${Math.abs(s.drift) > 0.3 ? ' (correcting)' : ''}`;
-    },
-  });
-  const sourceButtons = [...document.querySelectorAll('.src-toggle button')];
-  const linkSource = sourcePicker(sourceButtons, ui.ytUrl);
-
-  $('mediaFile').addEventListener('change', async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-    yt.unlock();
-    setMsg(`Uploading “${file.name}”…`);
-    try {
-      await uploadMedia(file, (p) => ($('uploadProgress').textContent = `${Math.round(p * 100)}%`), hostPin);
-      setMsg('Uploaded — starting on every screen.', 'ok');
-    } catch (err) {
-      setMsg(err.message, 'error');
-    } finally {
-      $('uploadProgress').textContent = '';
-    }
-  });
-
-  ui.tapSync.addEventListener('click', () => yt.unlock());
-  ui.soundBtn.addEventListener('click', () => {
-    yt.setMuted(!yt.muted);
-    yt.unlock();
-    ui.soundBtn.textContent = yt.muted ? '🔇 Sound off' : '🔊 Sound on';
-  });
-
-  ui.ytForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const url = ui.ytUrl.value.trim();
-    if (!url) return;
-    yt.unlock();
-    setMsg('Sending…');
-    const source = linkSource();
-    socket.timeout(5000).emit('media:submit', { source, url }, (err, res) => {
-      if (err) return setMsg('Server did not respond. Try again.', 'error');
-      if (!res.ok) return setMsg(res.error, 'error');
-      setMsg(
-        source === 'spotify'
-          ? 'Starting on the display. Spotify plays full songs only when logged in, otherwise 30-second previews.'
-          : 'Queued — starting on every screen.',
-        'ok'
-      );
-      ui.ytUrl.value = '';
-    });
-  });
-
-  function setMsg(text, kind) {
-    ui.ytMsg.textContent = text;
-    ui.ytMsg.className = `status small ${kind || ''}`;
-  }
-
-  function formatTime(sec) {
-    sec = Math.max(0, Math.floor(sec || 0));
-    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
-  }
-
   // ---------------------------------------------------------------- shared animation controls
   // Everyone shares one set of controls (latest change wins). Ranges mirror ANIM_DEFS in server.js,
   // which clamps them anyway.
   const MODES = ['Domain Warp', 'Reaction-Diffusion', 'Fluid Tracers', 'Julia Set', 'Mandelbrot', 'Julia Fluid', 'Fractal Flight'];
-  const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple'], ['hearts', 'Hearts']];
+  const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple'], ['hearts', 'Hearts'], ['invert', 'Invert'], ['swap', 'Music → Motion']];
   const pct = (v) => `${Math.round(v * 100)}%`;
   const SLIDERS = [
-    { key: 'chaos', label: '🌀 Chaos', min: 0, max: 1, step: 0.01, fmt: pct, hint: 'Calm ← → harder beats, bending, zoom punches and glitches' },
-    { key: 'glow', label: '✨ Glow', min: 0, max: 1, step: 0.01, fmt: pct, hint: 'Dim and soft ← → bright, vivid and blooming' },
-    { key: 'speed', label: '⏩ Speed', min: 0.1, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×` },
-    { key: 'hue', label: '🎨 Colour', min: 0, max: 1, step: 0.005, fmt: (v) => `${Math.round(v * 360)}°`, hint: 'Turns every colour around the colour wheel' },
+    { key: 'chaos', label: 'Chaos', min: 0, max: 1, step: 0.01, fmt: pct, hint: 'Calm ← → harder beats, bending, zoom punches and glitches' },
+    { key: 'glow', label: 'Glow', min: 0, max: 1, step: 0.01, fmt: pct, hint: 'Dim and soft ← → bright, vivid and blooming' },
+    { key: 'speed', label: 'Speed', min: 0.1, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×` },
+    { key: 'hue', label: 'Colour', min: 0, max: 1, step: 0.005, fmt: (v) => `${Math.round(v * 360)}°`, hint: 'Turns every colour around the colour wheel' },
     { key: 'tempo', label: 'Tempo', min: 40, max: 180, step: 1, fmt: (v) => `${Math.round(v)} BPM` },
   ];
   const CONTROL_SEND_MS = 66; // ~15 Hz while dragging
@@ -204,16 +109,28 @@
     b.textContent = label;
     b.disabled = true;
     b.addEventListener('click', () => {
-      yt.unlock();
       onClick();
     });
     return b;
+  }
+
+  // One gradient across the whole group: each selected button's underline shows its own slice.
+  function spanGradient(group) {
+    const place = () => {
+      group.style.setProperty('--span-w', `${group.clientWidth}px`);
+      for (const el of group.children) el.style.setProperty('--span-x', `${-el.offsetLeft}px`);
+    };
+    new ResizeObserver(place).observe(group);
+    new MutationObserver(place).observe(group, { childList: true });
+    document.fonts.ready.then(place);
+    place();
   }
 
   const modeChips = MODES.map((label, i) => chip(label, 'chip', () => sendControl({ mode: i })));
   modeChips.forEach((b) => $('modeGrid').appendChild(b));
   const fxChips = FX.map(([id, label]) => chip(label, 'chip fx', () => sendControl({ [id]: !anim[id] })));
   fxChips.forEach((b) => $('fxGrid').appendChild(b));
+  ['sourceGrid', 'modeGrid', 'fxGrid', 'hostRow', 'toolGrid', 'gameGrid'].forEach((id) => spanGradient($(id)));
 
   for (const d of SLIDERS) {
     const wrap = document.createElement('div');
@@ -272,7 +189,7 @@
   const LOCKS = [['open', 'Open'], ['limited', 'Sliders only'], ['locked', 'Locked']];
   const lockLevel = () => anim.lock || 'open';
   const can = (key) => isHost || lockLevel() === 'open' || (lockLevel() === 'limited' && SLIDER_KEYS.has(key));
-  const mediaAllowed = () => isHost || lockLevel() === 'open';
+  const fullControl = () => isHost || lockLevel() === 'open';
 
   socket.on('host:status', (st) => {
     isHost = !!st.host;
@@ -325,7 +242,7 @@
       b.classList.toggle('active', !!anim[FX[i][0]]);
       b.disabled = !can(FX[i][0]);
     });
-    $('animReset').disabled = !mediaAllowed();
+    $('animReset').disabled = !fullControl();
     const now = performance.now();
     for (const k in sliderEls) {
       const e = sliderEls[k];
@@ -338,31 +255,53 @@
     const lock = $('lockState');
     lock.hidden = isHost || lockLevel() === 'open';
     lock.textContent = lockLevel() === 'limited'
-      ? '🔒 The host has locked mode, effects and music. You can still use the sliders.'
-      : '🔒 The host has locked the controls and music.';
-    [...ui.ytForm.querySelectorAll('input, button'), ...sourceButtons].forEach((el) => (el.disabled = !mediaAllowed()));
-    $('mediaFile').disabled = !mediaAllowed();
-    $('mediaFile').parentElement.classList.toggle('disabled', !mediaAllowed());
+      ? 'The host has locked mode and effects. You can still use the sliders.'
+      : 'The host has locked the controls.';
     pad.classList.toggle('disabled', !touchAllowed());
-    $('touchHint').textContent = touchAllowed() ? TOUCH_HINT : '🔒 The host has locked the touch pad.';
+    renderTouchHint();
+    renderTilt();
+    renderGame();
     const manual = anim.heartbeat === false;
     const hb = $('hbState');
-    hb.textContent = manual
-      ? '♡ Live beat is off on the display: the Tempo slider sets the rhythm.'
-      : '♥ Taps, dancers and hearts drive the rhythm, then the music\'s beat, then Tempo.';
-    hb.className = `status small ${manual ? 'manual' : ''}`;
-    sliderEls.tempo.hint.textContent = manual ? 'Driving the visuals now' : 'Used when live beat is off, or nobody joins and no beat is heard';
+    hb.hidden = !manual;
+    hb.textContent = 'Live beat is off: Tempo sets the rhythm.';
+    sliderEls.tempo.hint.textContent = manual ? 'Driving the visuals now' : '';
     sliderEls.tempo.wrap.classList.toggle('dim', !manual && roomSensing);
   }
 
   // ---------------------------------------------------------------- touch pad
-  // A tap bursts on the display at the same spot, in this phone's colour; dragging leaves sparks.
-  // Taps from several phones within half a second merge into a shockwave (server.js -> TapCombos).
+  // Tap: a burst on the display at the same spot, in this phone's colour; taps from several phones
+  // within half a second merge into a shockwave (server.js -> TapCombos). Drag: stir the picture
+  // with the finger's speed, or paint on it. Hold with others: charge a blast (server.js -> CrowdHold).
   const pad = $('touchPad');
-  const TOUCH_HINT = $('touchHint').textContent;
+  const TOOL_KEY = 'pulse.tool';
+  const TOOL_HINTS = {
+    stir: 'Drag to stir the picture, tap for a burst. Hold with others to charge a blast.',
+    paint: 'Draw on the display. Strokes melt away after a few seconds.',
+  };
   const DRAG_SEND_MS = 70;
+  const HOLD_AFTER_MS = 350; // a finger down this long counts as holding
+  let tool = 'stir';
+  try { tool = localStorage.getItem(TOOL_KEY) === 'paint' ? 'paint' : 'stir'; } catch (_) { /* ignore */ }
   let lastDragSend = 0;
+  let lastPoint = null; // last drag sample sent: { x, y, t }
+  let holdTimer = null;
+  let holding = false;
+  let crowdText = '';
   const touchAllowed = () => isHost || lockLevel() !== 'locked';
+
+  function renderTouchHint() {
+    $('touchHint').textContent = !touchAllowed() ? 'The host has locked the touch pad.' : crowdText || TOOL_HINTS[tool];
+  }
+
+  function setTool(t) {
+    tool = t === 'paint' ? 'paint' : 'stir';
+    try { localStorage.setItem(TOOL_KEY, tool); } catch (_) { /* ignore */ }
+    $('toolGrid').querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
+    renderTouchHint();
+  }
+  $('toolGrid').querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+  setTool(tool);
 
   const padPoint = (e) => {
     const r = pad.getBoundingClientRect();
@@ -380,6 +319,15 @@
     pad.appendChild(s);
   }
 
+  function endHold() {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    lastPoint = null;
+    if (!holding) return;
+    holding = false;
+    socket.emit('touch:hold', false);
+  }
+
   pad.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     if (!touchAllowed()) return;
@@ -387,6 +335,12 @@
     const p = padPoint(e);
     socket.volatile.emit('touch', { x: p.x, y: p.y });
     padRipple(p, true);
+    lastPoint = { x: p.x, y: p.y, t: performance.now() };
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      holding = true;
+      socket.emit('touch:hold', true);
+    }, HOLD_AFTER_MS);
     if (navigator.vibrate) navigator.vibrate(8);
   });
   pad.addEventListener('pointermove', (e) => {
@@ -395,20 +349,156 @@
     if (t - lastDragSend < DRAG_SEND_MS) return;
     lastDragSend = t;
     const p = padPoint(e);
-    socket.volatile.emit('touch', { x: p.x, y: p.y, drag: true });
+    // Finger velocity in pad widths/heights per second: how hard the stir pushes.
+    const dt = lastPoint ? Math.max(0.016, (t - lastPoint.t) / 1000) : 1;
+    const vx = lastPoint ? (p.x - lastPoint.x) / dt : 0;
+    const vy = lastPoint ? (p.y - lastPoint.y) / dt : 0;
+    lastPoint = { x: p.x, y: p.y, t };
+    socket.volatile.emit('touch', { x: p.x, y: p.y, drag: true, vx, vy, tool });
     padRipple(p, false);
   });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => pad.addEventListener(ev, endHold));
 
-  socket.on('touch:combo', (c) => {
+  function padFlash(text) {
     const msg = $('comboMsg');
-    msg.textContent = `Combo ×${c.size}!`;
-    // Restart the CSS animations even when combos come back to back.
+    msg.textContent = text;
+    // Restart the CSS animations even when these come back to back.
     for (const el of [msg, pad]) {
       el.classList.remove('combo');
       void el.offsetWidth;
       el.classList.add('combo');
     }
+  }
+
+  socket.on('touch:combo', (c) => {
+    padFlash(`Combo ×${c.size}!`);
     if (navigator.vibrate) navigator.vibrate([20, 40, 30]);
+  });
+
+  // ---- Hold together: the room's progress shows under the pad while anyone holds.
+  socket.on('crowd:hold', (h) => {
+    const on = h.holders > 0 || h.charge > 0;
+    crowdText = !on ? '' : h.holders >= h.need
+      ? `Charging: ${Math.round(h.charge * 100)}%. Let go together to blast!`
+      : `Holding together: ${h.holders} of ${h.need} needed.`;
+    $('holdMeter').hidden = !on;
+    $('holdFill').style.width = `${Math.round(h.charge * 100)}%`;
+    renderTouchHint();
+  });
+  socket.on('crowd:release', (r) => {
+    padFlash(`Blast ${Math.round(r.power * 100)}%!`);
+    if (navigator.vibrate) navigator.vibrate([40, 30, 80]);
+  });
+
+  // ---- Tilt to steer: tipping the phone (from however it was held when switched on) tips the
+  // picture like a tray of liquid. The display uses the room's average tilt.
+  const TILT_RANGE_DEG = 35; // this much tilt = full strength
+  const TILT_SEND_MS = 100;
+  let tilting = false;
+  let tiltZero = null;
+  let tiltNow = { x: 0, y: 0 };
+  let tiltTimer = null;
+  const unit = (v) => Math.max(-1, Math.min(1, v));
+
+  function onOrient(e) {
+    if (e.beta == null || e.gamma == null) return;
+    if (!tiltZero) tiltZero = { b: e.beta, g: e.gamma };
+    tiltNow = { x: unit((e.gamma - tiltZero.g) / TILT_RANGE_DEG), y: unit((e.beta - tiltZero.b) / TILT_RANGE_DEG) };
+  }
+
+  function renderTilt() {
+    const b = $('tiltBtn');
+    b.classList.toggle('active', tilting);
+    b.setAttribute('aria-pressed', String(tilting));
+    b.disabled = !touchAllowed();
+  }
+
+  async function startTilt() {
+    if (typeof DeviceOrientationEvent === 'undefined') return padFlash('No tilt sensor');
+    // iPhones ask for permission, and only from a tap.
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try {
+        if ((await DeviceOrientationEvent.requestPermission()) !== 'granted') return padFlash('Tilt access denied');
+      } catch (_) {
+        return padFlash('Tilt access failed');
+      }
+    }
+    window.addEventListener('deviceorientation', onOrient);
+    tilting = true;
+    tiltZero = null;
+    tiltTimer = setInterval(() => {
+      if (tiltZero && touchAllowed()) socket.volatile.emit('tilt', tiltNow);
+    }, TILT_SEND_MS);
+    requestWakeLock();
+    renderTilt();
+  }
+
+  function stopTilt() {
+    window.removeEventListener('deviceorientation', onOrient);
+    clearInterval(tiltTimer);
+    tilting = false;
+    socket.emit('tilt', { off: true });
+    renderTilt();
+  }
+  $('tiltBtn').addEventListener('click', () => (tilting ? stopTilt() : startTilt()));
+
+  // ---------------------------------------------------------------- games
+  // One game at a time for the whole room, run by the server (server.js -> TapRace, PassColour).
+  const TEAM_NAMES = ['Red', 'Blue'];
+  let myN = 0;
+  let game = { kind: null };
+  let wasHolder = false;
+  const hueColor = (h) => `hsl(${Math.round(h * 360)}, 90%, 62%)`;
+
+  function renderGame() {
+    const s = game;
+    const running = !!s.kind;
+    $('gameGrid').querySelectorAll('[data-game]').forEach((b) => {
+      b.classList.toggle('active', s.kind === b.dataset.game);
+      b.disabled = running || !fullControl();
+    });
+    $('gameStop').hidden = !running || !fullControl();
+    const st = $('gameStatus');
+    const card = st.closest('.card');
+    st.style.color = '';
+    card.classList.remove('has-colour');
+    let text;
+    if (!running) {
+      text = fullControl() ? 'Start a game for the whole room.' : 'The host has locked the games.';
+    } else if (s.kind === 'race') {
+      const team = s.teams[myN];
+      const name = TEAM_NAMES[team];
+      if (name) st.style.color = hueColor(s.hues[team]);
+      const score = `Red ${s.score[0]} · Blue ${s.score[1]}`;
+      if (s.phase === 'countdown') text = `Tap race starts in ${s.left}… ${name ? `You're on ${name}.` : 'Tap the pad to join a team.'}`;
+      else if (s.phase === 'live') text = `${name ? `${name}: t` : 'T'}ap the pad as fast as you can! ${score} · ${s.left}s`;
+      else text = s.winner < 0 ? `It's a tie! ${score}` : `${TEAM_NAMES[s.winner]} wins! ${score}${s.winner === team ? '. That\'s you!' : ''}`;
+    } else {
+      const mine = s.holder === myN;
+      if (mine) {
+        card.classList.add('has-colour');
+        card.style.setProperty('--hold', hueColor(s.hue));
+        st.style.color = hueColor(s.hue);
+        if (!wasHolder && navigator.vibrate) navigator.vibrate([30, 50, 30]);
+      }
+      wasHolder = mine;
+      text = mine
+        ? `You have the colour! Your touches hit three times harder, so use the pad before it moves on. ${s.left}s left`
+        : `Someone else has the colour. It moves to another phone every few seconds. ${s.left}s left`;
+    }
+    st.textContent = text;
+  }
+
+  $('gameGrid').querySelectorAll('[data-game]').forEach((b) => b.addEventListener('click', () => {
+    socket.timeout(4000).emit('game:start', b.dataset.game, (err, res) => {
+      if (err || !res.ok) $('gameStatus').textContent = err ? 'The server did not respond.' : res.error;
+    });
+  }));
+  $('gameStop').addEventListener('click', () => socket.emit('game:stop'));
+  socket.on('game:state', (s) => {
+    game = s && s.kind ? s : { kind: null };
+    if (!game.kind) wasHolder = false;
+    renderGame();
   });
 
   // ---------------------------------------------------------------- joining: tap, dance or heart
@@ -518,7 +608,7 @@
     ui.bpm.textContent = bpm > 0 ? Math.round(bpm) : '--';
     ui.heart.classList.toggle('live', active);
     if (join === 'tap') {
-      ui.confidence.textContent = !active ? 'Tap along to join the beat' : bpm > 0 ? 'You\'re in the beat ♥' : 'Keep tapping…';
+      ui.confidence.textContent = !active ? 'Tap along to join the beat' : bpm > 0 ? 'You\'re in the beat' : 'Keep tapping…';
     } else if (join === 'dance') {
       ui.confidence.textContent = !dancing ? 'Start dancing to join' : `Moving: ${danceEnergy > 0.6 ? 'wild' : danceEnergy > 0.3 ? 'grooving' : danceEnergy > 0.08 ? 'warming up' : 'still'}`;
     }
@@ -548,7 +638,6 @@
   // ---- Tap: one beat per tap.
   $('tapBtn').addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    yt.unlock();
     onRhythmBeat();
     const b = $('tapBtn');
     b.classList.remove('hit');
@@ -597,7 +686,6 @@
   }
 
   async function startDance() {
-    yt.unlock();
     if (typeof DeviceMotionEvent === 'undefined') return setDanceStatus('This browser has no motion sensor access. Try Tap instead.', true);
     // iPhones ask for permission, and only from a tap.
     if (typeof DeviceMotionEvent.requestPermission === 'function') {
@@ -611,7 +699,7 @@
     dancing = true;
     motionSeen = false;
     $('danceBtn').textContent = 'Stop dancing';
-    setDanceStatus('Dancing! Move to the music ♥');
+    setDanceStatus('Dancing. Move to the music.');
     requestWakeLock();
     setTimeout(() => {
       if (dancing && !motionSeen) setDanceStatus('No motion data from this phone (some laptops and browsers have none). Try Tap instead.', true);
@@ -654,7 +742,6 @@
   let torchOn = false;
 
   ui.sensorBtn.addEventListener('click', () => {
-    yt.unlock();
     if (running) stopSensor();
     else startSensor();
   });
@@ -722,14 +809,18 @@
   const VIDEO_BASE = { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30 } };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // Camera/flash diagnostics: shown on the page and mirrored to the server console.
+  // The camera that had the flash last time, so the next start skips the lens search.
+  const TORCH_CAM_KEY = 'pulse.torchCam';
+  const savedTorchCam = () => { try { return localStorage.getItem(TORCH_CAM_KEY); } catch (_) { return null; } };
+  const saveTorchCam = (id) => { try { localStorage.setItem(TORCH_CAM_KEY, id); } catch (_) { /* ignore */ } };
+
+  // Camera/flash diagnostics, mirrored to the server console.
   const diagLines = [];
   let diagTimer = null;
   function dlog(msg) {
     const line = `${(performance.now() / 1000).toFixed(1)}s ${msg}`;
     diagLines.push(line);
     if (diagLines.length > 120) diagLines.shift();
-    ui.diagLog.textContent = diagLines.join('\n');
     clearTimeout(diagTimer);
     diagTimer = setTimeout(() => socket.emit('diag', { ua: navigator.userAgent, lines: diagLines.slice(-60) }), 400);
   }
@@ -768,6 +859,20 @@
    */
   async function openCameraWithTorch() {
     releaseStream();
+    const saved = savedTorchCam();
+    if (saved) {
+      try {
+        await attachStream(
+          await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...VIDEO_BASE, deviceId: { exact: saved } } })
+        );
+        dlog(`opened saved: ${describeTrack(stream.getVideoTracks()[0])}`);
+        torchOn = await setTorch(true);
+        if (torchOn) return;
+      } catch (e) {
+        dlog(`open saved camera failed ${errStr(e)}`);
+      }
+      releaseStream();
+    }
     await attachStream(
       await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...VIDEO_BASE, facingMode: { ideal: 'environment' } } })
     );
@@ -839,7 +944,10 @@
         await track.applyConstraints(c);
         const s = track.getSettings();
         dlog(`applyConstraints(${JSON.stringify(c)}) ok -> settings.torch=${s.torch}`);
-        if (s.torch === undefined || s.torch === on) return on;
+        if (s.torch === undefined || s.torch === on) {
+          if (on && s.deviceId) saveTorchCam(s.deviceId);
+          return on;
+        }
       } catch (e) {
         dlog(`applyConstraints(${JSON.stringify(c)}) failed ${errStr(e)}`);
       }
@@ -849,7 +957,7 @@
 
   function updateTorchUi() {
     ui.flashBtn.hidden = !running;
-    ui.flashBtn.textContent = torchOn ? '🔦 Flash on' : '🔦 Flash off';
+    ui.flashBtn.textContent = torchOn ? 'Flash on' : 'Flash off';
     ui.flashBtn.classList.toggle('on', torchOn);
   }
 
@@ -962,7 +1070,7 @@
     const c = detector.confidence;
     ui.bpm.textContent = detector.bpm > 0 && c > 0.2 ? Math.round(detector.bpm) : '--';
     ui.confidence.textContent = `signal quality: ${c > 0.7 ? 'great' : c > 0.4 ? 'good' : c > 0.2 ? 'fair' : 'searching…'}`;
-    setSensorStatus(c > 0.2 ? 'Streaming your pulse to the room ♥' : 'Reading… hold still.');
+    setSensorStatus(c > 0.2 ? 'Streaming your pulse to the room' : 'Reading… hold still.');
   }
 
   function setSensorStatus(text, isError) {
@@ -986,8 +1094,8 @@
   function drawWave() {
     const { width: w, height: h } = ui.wave;
     wctx.clearRect(0, 0, w, h);
-    wctx.lineWidth = 3;
-    wctx.strokeStyle = '#ff3d7f';
+    wctx.lineWidth = 2;
+    wctx.strokeStyle = '#ffffe3';
     wctx.beginPath();
     const n = waveBuf.length;
     for (let i = 0; i < n; i++) {

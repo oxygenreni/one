@@ -1,5 +1,5 @@
 // FX: final composite to the screen (scene + bloom, soft-clipped so stacked FX don't blow out),
-// then the per-phone heart rings and touch pad bursts on top.
+// then the per-phone heart rings, touch pad bursts, paint strokes and game tints on top.
 uniform sampler2D uSrc;
 uniform sampler2D uBloom;
 uniform float uBloomAmt;
@@ -11,6 +11,12 @@ uniform int uHeartCount;
 uniform vec4 uBursts[32]; // touch bursts: xy = spot (aspectUv space), z = age (s), w = power
 uniform float uBurstHue[32]; // the phone's hue; -1 = combo (rainbow)
 uniform int uBurstCount;
+uniform sampler2D uPaint; // paint strokes from phones (fades on its own)
+uniform float uPaintOn;
+uniform float uCharge;    // hold together: 0..1
+uniform vec4 uRace;       // tap race: x = strength, y = red share of the screen, zw = team hues
+uniform vec2 uPass;       // pass the colour: x = strength, y = holder's hue
+uniform float uInvert;    // Invert FX: 1 = negative picture
 
 // Rotates the colour around the grey axis (keeps luminance roughly constant).
 vec3 hueRotate(vec3 c, float a) {
@@ -65,8 +71,26 @@ void main() {
     float core = exp(-d * d / (0.0015 * b.w)) * exp(-age * 7.0) * min(b.w, 1.5);
     glow += col * (ring + core);
   }
-  if (uHeartCount > 0 || uBurstCount > 0) {
+  if (uPaintOn > 0.0) glow += texture(uPaint, vUv).rgb;
+  float edge = smoothstep(0.55, 1.6, length(p));
+  if (uCharge > 0.0) {
+    c *= 1.0 + 0.5 * uCharge;
+    // A rainbow aura closes in from the edges, flickering faster as the charge builds.
+    vec3 aura = hueToRgb(atan(p.y, p.x) / TAU + uTime * 0.3);
+    glow += aura * uCharge * edge * (0.3 + 0.15 * sin(uTime * (10.0 + 20.0 * uCharge)));
+  }
+  if (uPass.x > 0.0) glow += hueToRgb(uPass.y) * uPass.x * edge * edge * (0.25 + 0.25 * uBeat);
+  // Tap race: red floods in from the left, blue from the right; the line moves with the score.
+  if (uRace.x > 0.0) {
+    float line = uRace.y + 0.015 * sin(vUv.y * 18.0 + uTime * 3.0);
+    vec3 team = hueToRgb(vUv.x < line ? uRace.z : uRace.w);
+    c = mix(c, 1.0 - (1.0 - min(c, vec3(1.0))) * (1.0 - team * 0.55), uRace.x * 0.85);
+    glow += vec3(1.0) * exp(-abs(vUv.x - line) * 140.0) * uRace.x * 0.8;
+  }
+  if (uHeartCount > 0 || uBurstCount > 0 || uPaintOn > 0.0 || uCharge > 0.0 || uPass.x > 0.0 || uRace.x > 0.0) {
     c = 1.0 - (1.0 - min(c, vec3(1.0))) * (1.0 - min(glow, vec3(1.0))); // screen blend
   }
-  fragColor = vec4(min(c, vec3(1.0)), 1.0);
+  c = min(c, vec3(1.0));
+  if (uInvert > 0.0) c = 1.0 - c;
+  fragColor = vec4(c, 1.0);
 }
