@@ -218,3 +218,21 @@ main {
   70% { opacity: 1; transform: scale(1); }
   100% { opacity: 0; }
 }
+
+/* Joining: tap / dance / heart camera */
+.source-chips .chip { flex: 1; text-align: center; }
+.join-panel { margin-top: 12px; }
+.join-panel .status.manual { color: #ffd36b; margin-top: 0; }
+.tap-btn {
+  display: block; width: min(220px, 70vw); aspect-ratio: 1; margin: 8px auto 4px; border-radius: 50%;
+  border: 3px solid var(--me, var(--accent)); background: radial-gradient(circle, rgba(255, 61, 127, .25), #17111f 70%);
+  color: var(--fg); font: 800 1.6rem/1 system-ui, sans-serif; letter-spacing: .15em; cursor: pointer;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+.tap-btn.hit { animation: tapHit .25s ease-out; }
+@keyframes tapHit {
+  from { transform: scale(.92); box-shadow: 0 0 0 0 var(--me, var(--accent)), 0 0 40px var(--me, var(--accent)); }
+  to { transform: scale(1); box-shadow: 0 0 0 18px transparent, 0 0 0 transparent; }
+}
+.meter { height: 14px; border-radius: 999px; background: #0e0914; border: 1px solid var(--line); overflow: hidden; }
+.meter-fill { height: 100%; width: 0%; border-radius: 999px; background: linear-gradient(90deg, #7cf7d4, #ff3d7f); transition: width .1s linear; }

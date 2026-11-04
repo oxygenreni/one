@@ -38,15 +38,15 @@
   <!-- Join QR shown on the visuals (toggle with Q); outside .ui so it doesn't auto-hide. -->
   <div id="qrCorner" class="qr-corner" hidden>
     <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page">
-    <span>Scan to add your heartbeat ♥</span>
+    <span>Scan to join in ♥</span>
   </div>
 
   <div id="ui" class="ui">
     <div class="hud hud-left">
       <span id="conn" class="dot"></span>
       <span>♥ <b id="hudBpm">--</b> <span id="hudMode">BPM</span></span>
-      <span><b id="hudUsers">0</b> hearts</span>
-      <button id="hbBtn" class="btn small hb-btn" type="button">♥ Heartbeat on</button>
+      <span><b id="hudUsers">0</b> joined</span>
+      <button id="hbBtn" class="btn small hb-btn" type="button">♥ Live beat</button>
       <button id="lockBtn" class="btn small lock-btn" type="button">🔓 Phones: all</button>
       <span class="muted" id="hudFps"></span>
     </div>
@@ -99,7 +99,7 @@
       </form>
     </div>
 
-    <div class="keys muted">1–7 modes · ←/→ cycle · K/E/B/R/T effects · M heartbeat on/off · Q join QR · H hide UI · F fullscreen · V video · P play/pause</div>
+    <div class="keys muted">1–7 modes · ←/→ cycle · K/E/B/R/T effects · M live beat / manual tempo · Q join QR · H hide UI · F fullscreen · V video · P play/pause</div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>

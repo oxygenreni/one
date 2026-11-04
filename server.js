@@ -328,6 +328,7 @@ class PulseAggregator {
       bpm,
       signal: clamp(finite(data.signal), -1, 1),
       confidence: clamp(finite(data.confidence), 0, 1),
+      energy: typeof data.energy === 'number' && Number.isFinite(data.energy) ? clamp(data.energy, 0, 1) : null, // dancers only
       t,
       heart,
       beats: prev ? prev.beats : 0,
@@ -351,6 +352,8 @@ class PulseAggregator {
     let confSum = 0;
     let active = 0;
     const hearts = []; // [n, hue, beats since last tick, confidence] per phone with a good signal
+    let motion = 0; // average movement energy of the dancing phones
+    let dancers = 0;
     for (const [id, s] of this.sensors) {
       if (t - s.t > PULSE_STALE_MS) {
         this.sensors.delete(id);
@@ -360,6 +363,10 @@ class PulseAggregator {
         hearts.push([s.heart.n, s.heart.hue, s.beats, Math.round(s.confidence * 100) / 100]);
       }
       s.beats = 0;
+      if (s.energy !== null) {
+        motion += s.energy;
+        dancers++;
+      }
       confSum += s.confidence;
       signal += s.signal * s.confidence;
       if (s.bpm > 0 && s.confidence > 0.2) {
@@ -377,6 +384,8 @@ class PulseAggregator {
       active,
       sensors: n,
       hearts,
+      motion: dancers > 0 ? Math.round((motion / dancers) * 100) / 100 : 0,
+      dancers,
       t,
     };
     this.beats = 0;

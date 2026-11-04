@@ -14,25 +14,46 @@
   </header>
 
   <main>
-    <section class="card sensor">
+    <section class="card sensor" aria-labelledby="joinTitle">
       <div class="bpm-row">
         <div id="heart" class="heart" aria-hidden="true">♥</div>
         <div>
           <div class="bpm"><span id="bpm">--</span><small>BPM</small></div>
-          <div id="confidence" class="muted">signal quality: –</div>
+          <div id="confidence" class="muted">Pick how you want to join</div>
           <div id="youColor" class="muted small" hidden>This is your colour on the display</div>
         </div>
       </div>
-      <canvas id="wave" class="wave" width="600" height="120" aria-label="Live pulse waveform"></canvas>
-      <p id="sensorStatus" class="status">Tap start, then cover the rear camera <em>and</em> flash with a fingertip. Hold still, press lightly.</p>
-      <button id="sensorBtn" class="btn primary" type="button">Start pulse sensor</button>
-      <button id="flashBtn" class="btn flash" type="button" hidden>🔦 Flash off</button>
-      <details class="diag"><summary>Camera diagnostics</summary><pre id="diagLog"></pre></details>
+      <div id="joinTitle" class="field-label">How are you joining?</div>
+      <div id="sourceGrid" class="chips source-chips" role="group" aria-label="How are you joining?">
+        <button type="button" class="chip" data-join="tap">👆 Tap</button>
+        <button type="button" class="chip" data-join="dance">💃 Dance</button>
+        <button type="button" class="chip" data-join="heart">♥ Heart camera</button>
+      </div>
+
+      <div id="panelTap" class="join-panel" hidden>
+        <button id="tapBtn" class="tap-btn" type="button">TAP</button>
+        <p class="status small">Tap along to the music. Everyone's taps set the beat on the display.</p>
+      </div>
+
+      <div id="panelDance" class="join-panel" hidden>
+        <div class="meter" aria-hidden="true"><div id="danceMeter" class="meter-fill"></div></div>
+        <p id="danceStatus" class="status">Hold your phone or put it in your pocket, then move. Jumps and drops count as beats, and the more you move, the wilder it gets.</p>
+        <button id="danceBtn" class="btn primary" type="button">Start dancing</button>
+      </div>
+
+      <div id="panelHeart" class="join-panel" hidden>
+        <p class="status small manual">Experimental: works on some phones only.</p>
+        <canvas id="wave" class="wave" width="600" height="120" aria-label="Live pulse waveform"></canvas>
+        <p id="sensorStatus" class="status">Tap start, then cover the rear camera <em>and</em> flash with a fingertip. Hold still, press lightly.</p>
+        <button id="sensorBtn" class="btn primary" type="button">Start pulse sensor</button>
+        <button id="flashBtn" class="btn flash" type="button" hidden>🔦 Flash off</button>
+        <details class="diag"><summary>Camera diagnostics</summary><pre id="diagLog"></pre></details>
+      </div>
     </section>
 
     <section class="card room">
-      <div><span class="muted">Room heartbeat</span> <strong id="roomBpm">--</strong> <span class="muted">BPM</span></div>
-      <div class="muted"><span id="roomSensors">0</span> sensors · <span id="roomDisplays">0</span> displays</div>
+      <div><span class="muted">Room beat</span> <strong id="roomBpm">--</strong> <span class="muted">BPM</span></div>
+      <div class="muted"><span id="roomSensors">0</span> joined · <span id="roomDisplays">0</span> displays</div>
     </section>
 
     <section class="card touch" aria-labelledby="touchTitle">

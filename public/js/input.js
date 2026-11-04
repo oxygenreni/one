@@ -54,9 +54,9 @@
   let roomSensing = false;
   timeSync.start();
 
-  // A server restarted with new code reloads this page, unless that would interrupt a running sensor.
+  // A server restarted with new code reloads this page, unless that would interrupt the sensor or dancing.
   watchServerBuild(socket, (kind) => {
-    if (kind === 'updated' && !running) return location.reload();
+    if (kind === 'updated' && !running && !dancing) return location.reload();
     showBanner(STALE_TEXT[kind], kind === 'updated' ? { label: 'Reload', run: () => location.reload() } : null);
   });
 
@@ -67,6 +67,7 @@
     $('youColor').hidden = false;
     $('youColor').style.color = color;
     $('touchPad').style.setProperty('--me', color);
+    $('tapBtn').style.setProperty('--me', color);
   });
 
   // ---------------------------------------------------------------- shared media (locked to server)
@@ -349,10 +350,10 @@
     const manual = anim.heartbeat === false;
     const hb = $('hbState');
     hb.textContent = manual
-      ? '♡ Heartbeat is off on the display: the Tempo slider sets the rhythm.'
-      : '♥ Heartbeats drive the rhythm. Tempo takes over when nobody is sensing.';
+      ? '♡ Live beat is off on the display: the Tempo slider sets the rhythm.'
+      : '♥ Taps, dancers and hearts drive the rhythm, then the music\'s beat, then Tempo.';
     hb.className = `status small ${manual ? 'manual' : ''}`;
-    sliderEls.tempo.hint.textContent = manual ? 'Driving the visuals now' : 'Used when the heartbeat is off or nobody is sensing';
+    sliderEls.tempo.hint.textContent = manual ? 'Driving the visuals now' : 'Used when live beat is off, or nobody joins and no beat is heard';
     sliderEls.tempo.wrap.classList.toggle('dim', !manual && roomSensing);
   }
 
@@ -411,6 +412,234 @@
     }
     if (navigator.vibrate) navigator.vibrate([20, 40, 30]);
   });
+
+  // ---------------------------------------------------------------- joining: tap, dance or heart
+  // Tap and dance send the same `pulse` messages as the heart sensor (BPM, confidence, beat), so the
+  // display treats every phone alike. Dancers also send how hard they move (`energy`).
+
+  /** Turns beat times (taps or dance jolts) into a BPM and a confidence, like the heart sensor's. */
+  class Rhythm {
+    constructor() {
+      this.times = [];
+    }
+
+    beat(t) {
+      this.times.push(t);
+      if (this.times.length > 8) this.times.shift();
+    }
+
+    reset() {
+      this.times = [];
+    }
+
+    idle(t) {
+      const last = this.times[this.times.length - 1];
+      return !last || t - last > RHYTHM_IDLE_MS;
+    }
+
+    /** Beat-to-beat gaps in the 40..210 BPM range; pauses and double taps are left out. */
+    gaps() {
+      const g = [];
+      for (let i = 1; i < this.times.length; i++) {
+        const d = this.times[i] - this.times[i - 1];
+        if (d >= 285 && d <= 1500) g.push(d);
+      }
+      return g.slice(-6);
+    }
+
+    bpm(t) {
+      const g = this.gaps();
+      if (this.idle(t) || g.length < 2) return 0;
+      const sorted = [...g].sort((a, b) => a - b);
+      return 60000 / sorted[sorted.length >> 1];
+    }
+
+    /** 0 when idle; otherwise higher the more even the beats are. */
+    confidence(t) {
+      if (this.idle(t)) return 0;
+      const g = this.gaps();
+      if (g.length < 2) return 0.4;
+      const mean = g.reduce((s, v) => s + v, 0) / g.length;
+      const spread = g.reduce((s, v) => s + Math.abs(v - mean), 0) / g.length / mean;
+      return Math.min(1, Math.max(0.3, 1 - spread * 3));
+    }
+  }
+
+  const RHYTHM_IDLE_MS = 3000;  // no beats for this long = stop counting as joined
+  const RHYTHM_MIN_GAP_MS = 55; // the server drops pulse messages closer together than 50 ms
+  const JOIN_KEY = 'pulse.join';
+  const rhythm = new Rhythm();
+  let join = 'tap';
+  try { join = localStorage.getItem(JOIN_KEY) || 'tap'; } catch (_) { /* ignore */ }
+  let dancing = false;
+  let danceEnergy = 0;
+  let rhythmSending = false;
+  let lastRhythmSend = 0;
+  let beatPending = false;
+  let flushTimer = null;
+
+  function sendRhythm() {
+    clearTimeout(flushTimer);
+    const t = performance.now();
+    if (t - lastRhythmSend < RHYTHM_MIN_GAP_MS) {
+      flushTimer = setTimeout(sendRhythm, RHYTHM_MIN_GAP_MS - (t - lastRhythmSend));
+      return;
+    }
+    lastRhythmSend = t;
+    const bpm = rhythm.bpm(t);
+    socket.volatile.emit('pulse', {
+      bpm: Math.round(bpm * 10) / 10,
+      signal: 0,
+      confidence: Math.round(Math.max(rhythm.confidence(t), dancing ? 0.3 : 0) * 100) / 100,
+      beat: beatPending,
+      energy: dancing ? Math.round(danceEnergy * 100) / 100 : undefined,
+    });
+    beatPending = false;
+    rhythmSending = true;
+  }
+
+  function onRhythmBeat() {
+    rhythm.beat(performance.now());
+    beatPending = true;
+    flashHeart();
+    sendRhythm();
+  }
+
+  // Keeps the server up to date between beats, and leaves the room after a few quiet seconds.
+  setInterval(() => {
+    if (join === 'heart' || !socket.connected) return;
+    const t = performance.now();
+    const active = dancing || !rhythm.idle(t);
+    if (active && t - lastRhythmSend >= PULSE_SEND_MS) sendRhythm();
+    if (!active && rhythmSending) {
+      socket.emit('pulse:stop');
+      rhythmSending = false;
+    }
+    const bpm = rhythm.bpm(t);
+    ui.bpm.textContent = bpm > 0 ? Math.round(bpm) : '--';
+    ui.heart.classList.toggle('live', active);
+    if (join === 'tap') {
+      ui.confidence.textContent = !active ? 'Tap along to join the beat' : bpm > 0 ? 'You\'re in the beat ♥' : 'Keep tapping…';
+    } else if (join === 'dance') {
+      ui.confidence.textContent = !dancing ? 'Start dancing to join' : `Moving: ${danceEnergy > 0.6 ? 'wild' : danceEnergy > 0.3 ? 'grooving' : danceEnergy > 0.08 ? 'warming up' : 'still'}`;
+    }
+  }, PULSE_SEND_MS);
+
+  function setJoin(j) {
+    if (!['tap', 'dance', 'heart'].includes(j)) j = 'tap';
+    if (j !== 'heart' && running) stopSensor();
+    if (j !== 'dance' && dancing) stopDance();
+    join = j;
+    try { localStorage.setItem(JOIN_KEY, j); } catch (_) { /* ignore */ }
+    rhythm.reset();
+    if (rhythmSending) {
+      socket.emit('pulse:stop');
+      rhythmSending = false;
+    }
+    document.querySelectorAll('#sourceGrid [data-join]').forEach((b) => b.classList.toggle('active', b.dataset.join === j));
+    $('panelTap').hidden = j !== 'tap';
+    $('panelDance').hidden = j !== 'dance';
+    $('panelHeart').hidden = j !== 'heart';
+    ui.bpm.textContent = '--';
+    ui.heart.classList.remove('live');
+    if (j === 'heart') ui.confidence.textContent = 'signal quality: –';
+  }
+  document.querySelectorAll('#sourceGrid [data-join]').forEach((b) => b.addEventListener('click', () => setJoin(b.dataset.join)));
+
+  // ---- Tap: one beat per tap.
+  $('tapBtn').addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    yt.unlock();
+    onRhythmBeat();
+    const b = $('tapBtn');
+    b.classList.remove('hit');
+    void b.offsetWidth; // restart the animation
+    b.classList.add('hit');
+    if (navigator.vibrate) navigator.vibrate(10);
+  });
+
+  // ---- Dance: the motion sensor. Energy = how hard you move; sharp jolts well above your recent
+  // movement are beats.
+  const JOLT_MIN = 4;          // m/s² above gravity
+  const JOLT_RATIO = 2.2;      // ... and this many times the recent average
+  const JOLT_REFRACTORY_MS = 280;
+  let motionAvg = 1;
+  let lastMag = 0;
+  let lastJolt = 0;
+  let lastMotionT = 0;
+  let motionSeen = false;
+
+  function onMotion(e) {
+    let mag;
+    const a = e.acceleration;
+    if (a && a.x != null) mag = Math.hypot(a.x, a.y, a.z);
+    else {
+      const g = e.accelerationIncludingGravity;
+      if (!g || g.x == null) return;
+      mag = Math.abs(Math.hypot(g.x, g.y, g.z) - 9.81);
+    }
+    motionSeen = true;
+    const t = performance.now();
+    const dt = Math.min(0.1, Math.max(0.001, (t - (lastMotionT || t)) / 1000));
+    lastMotionT = t;
+    danceEnergy += (Math.min(1, mag / 12) - danceEnergy) * (1 - Math.exp(-dt / 0.4));
+    motionAvg += (mag - motionAvg) * (1 - Math.exp(-dt / 1.5));
+    const threshold = Math.max(JOLT_MIN, motionAvg * JOLT_RATIO);
+    if (mag > threshold && lastMag <= threshold && t - lastJolt > JOLT_REFRACTORY_MS) {
+      lastJolt = t;
+      onRhythmBeat();
+    }
+    lastMag = mag;
+  }
+
+  function setDanceStatus(text, isError) {
+    $('danceStatus').textContent = text;
+    $('danceStatus').className = `status ${isError ? 'error' : ''}`;
+  }
+
+  async function startDance() {
+    yt.unlock();
+    if (typeof DeviceMotionEvent === 'undefined') return setDanceStatus('This browser has no motion sensor access. Try Tap instead.', true);
+    // iPhones ask for permission, and only from a tap.
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      try {
+        if ((await DeviceMotionEvent.requestPermission()) !== 'granted') return setDanceStatus('Motion access was denied. Allow it in Safari settings, or use Tap.', true);
+      } catch (err) {
+        return setDanceStatus(`Motion access failed: ${err.message}`, true);
+      }
+    }
+    window.addEventListener('devicemotion', onMotion);
+    dancing = true;
+    motionSeen = false;
+    $('danceBtn').textContent = 'Stop dancing';
+    setDanceStatus('Dancing! Move to the music ♥');
+    requestWakeLock();
+    setTimeout(() => {
+      if (dancing && !motionSeen) setDanceStatus('No motion data from this phone (some laptops and browsers have none). Try Tap instead.', true);
+    }, 2500);
+    requestAnimationFrame(drawDanceMeter);
+  }
+
+  function stopDance() {
+    window.removeEventListener('devicemotion', onMotion);
+    dancing = false;
+    danceEnergy = 0;
+    $('danceBtn').textContent = 'Start dancing';
+    $('danceMeter').style.width = '0%';
+    setDanceStatus('Stopped. Tap Start dancing to join again.');
+    if (wakeLock && !running) {
+      wakeLock.release().catch(() => {});
+      wakeLock = null;
+    }
+  }
+
+  function drawDanceMeter() {
+    if (!dancing) return;
+    $('danceMeter').style.width = `${Math.round(danceEnergy * 100)}%`;
+    requestAnimationFrame(drawDanceMeter);
+  }
+
+  $('danceBtn').addEventListener('click', () => (dancing ? stopDance() : startDance()));
 
   // ---------------------------------------------------------------- camera PPG
   const detector = new PulseDetector();
@@ -657,10 +886,9 @@
     }
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && running) {
-      requestWakeLock();
-      if (torchOn) setTorch(true);
-    }
+    if (document.visibilityState !== 'visible') return;
+    if (running || dancing) requestWakeLock();
+    if (running && torchOn) setTorch(true);
   });
 
   // A camera switch replaces the video source; bump the generation so stale callbacks exit.
@@ -772,4 +1000,5 @@
     wctx.stroke();
   }
   drawWave();
+  setJoin(join);
 })();

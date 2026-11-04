@@ -35,7 +35,7 @@ To try it without phones, run `npm run simulate -- http://localhost:3000 25`. Th
 | --- | --- |
 | `1`–`7` / click | Switch visual mode (organic noise dissolve between modes). Shared with every display and phone. |
 | `K` `E` `B` `R` `T` / click | Toggle the FX layers: Kaleidoscope, Echo, Bloom, Heart Ripple, Hearts. They stack and are shared too. |
-| `M` / **♥ Heartbeat** button | Turn heartbeat mode off or on. When it's off, phone sensors are ignored and the **Tempo** slider sets the rhythm at full strength. |
+| `M` / **♥ Live beat** button | Switch between the live beat and **Manual tempo**. In manual, phones and the music are ignored and the **Tempo** slider sets the rhythm at full strength. The HUD shows where the beat comes from: phones, ♪ music, or manual. |
 | **🔓 Phones** button | Host lock: cycles what phones may change between *all*, *sliders* only, and *none*. Hover over it to see the host PIN. |
 | `←` `→` | Cycle modes |
 | `H` | Hide the UI (it also hides itself after 3.5 s without mouse movement) |
@@ -43,6 +43,20 @@ To try it without phones, run `npm run simulate -- http://localhost:3000 25`. Th
 | `V` | Collapse the video. Playback keeps going. |
 | `P` | Play/pause for everyone |
 | `Q` | Show/hide a QR code in the corner that phones can scan to join |
+
+## Joining from a phone
+
+The top card asks **How are you joining?** Every choice drives the same rhythm, so the coloured rings, combos and modes work with any of them.
+
+| Choice | What it does |
+| --- | --- |
+| 👆 Tap (default) | Tap the big button along to the music. Each tap is a beat; the BPM is the median gap between your last few taps. |
+| 💃 Dance | Uses the phone's motion sensor. How hard you move heats up the visuals (dancers' average energy is added to `uEnergy`), and sharp jolts well above your recent movement count as beats. iPhones ask for motion permission once. |
+| ♥ Heart camera | The fingertip-over-camera pulse sensor. Experimental: it works on some phones only. |
+
+A tap or dance phone that goes quiet for 3 s leaves the room until it beats again. Tap and dance phones send the same `pulse` messages as the heart sensor (BPM, confidence, beat), plus `energy` from dancers, which the server averages into `pulse:agg.motion`.
+
+**Where the beat comes from.** The display picks, in order: phones that are sending a BPM; otherwise **the music's own beat**; otherwise the **Tempo** slider. For the music beat, the display collects the last 8 s of bass hits and tests every tempo from 70 to 180 BPM for how well the hits line up (it also checks the half-beat, so off-beat bass still counts). It only follows the song when one tempo clearly stands out and stays steady, so random noise never takes over. It then pulls the beat clock onto the song's beats. This needs an audio source on the display.
 
 ## Animation controls (phones)
 

@@ -103,6 +103,9 @@
     lastRealBeat: 0,
     wave: 0,
     breath: 0,
+    motion: 0,       // smoothed movement energy of dancing phones
+    targetMotion: 0,
+    source: 'tempo', // what sets the rhythm: 'phones', 'music' or 'tempo'
   };
 
   socket.on('pulse:agg', (a) => {
@@ -111,12 +114,15 @@
     if (a.bpm > 0) pulse.targetBpm = a.bpm;
     pulse.targetStrength = a.active > 0 ? clamp(0.35 + a.confidence, 0.35, 1) : 0;
     if (!controls.heartbeat) {
-      // Heartbeat disabled: sensors are shown in the HUD but don't drive anything.
+      // Live beat off: phones are shown in the HUD but don't drive anything.
       hearts.clear();
+      pulse.targetMotion = 0;
       return;
     }
     trackHearts(a.hearts);
-    if (a.beats > 0 && a.active > 0) {
+    pulse.targetMotion = a.motion || 0;
+    // Every beat kicks, even a first tap that has no BPM yet.
+    if (a.beats > 0) {
       const n = Math.max(1, a.active);
       pulse.kick = Math.min(1.5, pulse.kick + (0.8 * a.beats) / n);
       pulse.lastRealBeat = performance.now();
@@ -222,20 +228,95 @@
     return bursts.length;
   }
 
+  // ---- Music beat: with nobody sending a rhythm, the beat clock follows the song. Bass onsets from
+  // the last 8 s are tested against every tempo from 70 to 180 BPM; the tempo they line up with best
+  // (and where on it they land) becomes the beat.
+  const music = { onsets: [], seen: 0, bpm: 0, phase: 0, conf: 0, candidate: 0, nextEval: 0 };
+  const MUSIC_WINDOW_S = 8;
+  const MUSIC_MIN_ONSETS = 6;
+
+  function trackMusicBeat(nowMs) {
+    const now = nowMs / 1000;
+    if (audio.onsetEvents !== music.seen) {
+      music.seen = audio.onsetEvents;
+      music.onsets.push(now);
+    }
+    while (music.onsets.length && now - music.onsets[0] > MUSIC_WINDOW_S) music.onsets.shift();
+    if (now < music.nextEval) return;
+    music.nextEval = now + 0.5;
+    const n = music.onsets.length;
+    if (n < MUSIC_MIN_ONSETS) {
+      music.conf = Math.max(0, music.conf - 0.25);
+      return;
+    }
+    // Phase coherence: onsets on the beat all point the same way on a circle that turns once per beat.
+    // The half-beat circle is scored too, so bass on the off-beats doesn't cancel the beat out.
+    let best = 0;
+    let bestBpm = 0;
+    let bestPhase = 0;
+    const scores = [];
+    for (let bpm = 70; bpm <= 180; bpm += 0.5) {
+      const w = (TAU * bpm) / 60;
+      let re = 0;
+      let im = 0;
+      let re2 = 0;
+      let im2 = 0;
+      for (const t of music.onsets) {
+        re += Math.cos(w * t);
+        im += Math.sin(w * t);
+        re2 += Math.cos(2 * w * t);
+        im2 += Math.sin(2 * w * t);
+      }
+      // A slight pull toward ~115 BPM settles double/half-tempo ties.
+      const coherence = (Math.hypot(re, im) + 0.5 * Math.hypot(re2, im2)) / (1.5 * n);
+      const score = coherence * (0.9 + 0.1 * Math.exp(-((Math.log2(bpm / 115)) ** 2) / 0.5));
+      scores.push(score);
+      if (score > best) {
+        best = score;
+        bestBpm = bpm;
+        bestPhase = Math.atan2(im, re) / TAU; // beats fall where bpm/60 * t - bestPhase is a whole number
+      }
+    }
+    // A real beat stands well above the typical tempo (random hits score about 2x the median at
+    // best) and stays put between checks (random hits jump to a new tempo every time).
+    scores.sort((a, b) => a - b);
+    const ratio = best / Math.max(1e-6, scores[scores.length >> 1]);
+    const steady = Math.abs(bestBpm - music.candidate) <= music.candidate * 0.03;
+    music.candidate = bestBpm;
+    const conf = steady ? clamp((ratio - 2.2) / 2, 0, 1) : 0;
+    music.conf += (conf - music.conf) * 0.5;
+    if (conf > 0.2) {
+      music.bpm = bestBpm;
+      music.phase = bestPhase;
+    }
+  }
+
   function updatePulse(dt, nowMs) {
-    // Heartbeat off = manual mode: the tempo control drives a full-strength synthetic heartbeat.
+    trackMusicBeat(nowMs);
+    // What sets the rhythm, in order: phones (taps, dancers, hearts), the music's beat, the Tempo
+    // control. Live beat off = manual mode: Tempo drives a full-strength synthetic beat.
     const manual = !ctl.heartbeat;
     const real = !manual && pulse.targetStrength > 0;
-    const goal = real && pulse.targetBpm > 0 ? pulse.targetBpm : ctl.tempo;
-    pulse.bpm += (goal - pulse.bpm) * lerpK(dt, manual ? 0.4 : 1.5);
-    pulse.strength += ((manual ? 1 : pulse.targetStrength) - pulse.strength) * lerpK(dt, 1.0);
+    const onMusic = !manual && !real && music.conf > 0.3 && music.bpm > 0;
+    pulse.source = real ? 'phones' : onMusic ? 'music' : 'tempo';
+    const goal = real && pulse.targetBpm > 0 ? pulse.targetBpm : onMusic ? music.bpm : ctl.tempo;
+    pulse.bpm += (goal - pulse.bpm) * lerpK(dt, manual ? 0.4 : onMusic ? 0.6 : 1.5);
+    pulse.strength += ((manual ? 1 : onMusic ? 0.8 : pulse.targetStrength) - pulse.strength) * lerpK(dt, 1.0);
 
     const prev = pulse.phase;
     pulse.phase += (dt * pulse.bpm) / 60;
+    if (onMusic) {
+      // Pull the beat clock onto the song's beats.
+      const want = (nowMs / 1000) * (music.bpm / 60) - music.phase;
+      let off = (want - pulse.phase) % 1;
+      if (off > 0.5) off -= 1;
+      if (off < -0.5) off += 1;
+      pulse.phase += off * lerpK(dt, 0.4);
+    }
     if (Math.floor(pulse.phase) > Math.floor(prev)) {
       pulse.beatEvents++;
       const sinceReal = nowMs - pulse.lastRealBeat;
-      pulse.kick = Math.max(pulse.kick, manual || (real && sinceReal < 2500) ? 0.75 : real ? 0.6 : 0.35);
+      pulse.kick = Math.max(pulse.kick, manual || onMusic || (real && sinceReal < 2500) ? 0.75 : real ? 0.6 : 0.35);
     }
     pulse.kick *= Math.exp(-dt * 3.5);
     pulse.beat = pulse.kick * ctl.intensity;
@@ -247,8 +328,10 @@
     pulse.wave = clamp((Math.max(lub, dub) * (0.45 + 0.55 * pulse.strength) + 0.4 * pulse.kick) * ctl.intensity, 0, 1);
     pulse.breath = Math.sin((pulse.phase / 4) * TAU) * ctl.breath;
 
+    // Dancers heat the room up: the harder they move, the wilder every mode gets.
+    pulse.motion += (pulse.targetMotion - pulse.motion) * lerpK(dt, 0.5);
     const heat = clamp((pulse.bpm - 55) / 60, 0, 1) * (0.4 + 0.6 * pulse.strength);
-    pulse.energy += (clamp(heat + 0.25 * pulse.beat + ctl.heat, 0, 1) - pulse.energy) * lerpK(dt, 0.6);
+    pulse.energy += (clamp(heat + 0.25 * pulse.beat + 0.7 * pulse.motion + ctl.heat, 0, 1) - pulse.energy) * lerpK(dt, 0.6);
   }
 
   // ======================================================================== audio FFT
@@ -1454,19 +1537,21 @@
   }
 
   function updateHud() {
-    $('hudBpm').textContent = !controls.heartbeat || pulse.targetStrength > 0 ? Math.round(pulse.bpm) : '--';
-    $('hudUsers').textContent = pulse.active;
+    $('hudBpm').textContent = !controls.heartbeat || pulse.source !== 'tempo' ? Math.round(pulse.bpm) : '--';
+    $('hudMode').textContent = !controls.heartbeat ? 'BPM · manual' : pulse.source === 'music' ? 'BPM · ♪ music' : pulse.source === 'phones' ? 'BPM · phones' : 'BPM';
+    $('hudUsers').textContent = pulse.sensors;
     $('hudFps').textContent = `${Math.round(1000 / view.frameMs)} fps · ${Math.round(view.scale * 100)}%`;
   }
 
-  // ---- Heartbeat on/off (shared): off = sensors are ignored and the tempo control sets the rhythm.
+  // ---- Live beat on/off (shared): off = phones and music are ignored and the tempo control sets the rhythm.
   function updateHeartbeatUi() {
     const on = controls.heartbeat;
     const b = $('hbBtn');
-    b.textContent = on ? '♥ Heartbeat on' : '♡ Heartbeat off';
+    b.textContent = on ? '♥ Live beat' : '♡ Manual tempo';
     b.classList.toggle('off', !on);
-    b.title = on ? 'Phones\' heartbeats drive the visuals. Click (M) to switch to manual tempo.' : 'Manual mode: the tempo slider drives the visuals. Click (M) to use heartbeats again.';
-    $('hudMode').textContent = on ? 'BPM' : 'BPM · manual';
+    b.title = on
+      ? 'Phones (taps, dancing, hearts) drive the rhythm, then the music\'s beat. Click (M) for manual tempo.'
+      : 'Manual mode: the tempo slider drives the visuals. Click (M) to go back to the live beat.';
   }
   const toggleHeartbeat = () => setControl({ heartbeat: !controls.heartbeat });
   $('hbBtn').addEventListener('click', toggleHeartbeat);
