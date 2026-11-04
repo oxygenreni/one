@@ -1,0 +1,132 @@
+# Pulse — collective heartbeat visualizer
+
+Phones measure their users' heartbeats with the camera. A YouTube track plays in sync on every screen. A full-screen WebGL display turns the room's combined pulse and the music's spectrum into seven real-time shader worlds, with stackable FX layers on top.
+
+```
+ phones (input.html)                server (Node/Express/Socket.io)            display (output.html)
+ camera → PPG → BPM ──pulse 10Hz──▶ latest-sample-per-phone aggregator ──15Hz──▶ pulse uniforms ─┐
+ YouTube URL ────────yt:submit────▶ authoritative playback clock ──yt:state──▶ YouTube player   │
+ YouTube player ◀───yt:state 2s────┘   (+ time:ping clock sync)                  │ tab audio    ▼
+                                                                                 └─▶ Web Audio FFT → WebGL
+```
+
+## Run
+
+```bash
+npm install
+npm run tunnel         # recommended: public HTTPS address for phones, valid certificate, no warnings
+npm start              # http://localhost:3000  (camera only works on localhost)
+npm run start:https    # https://<LAN-IP>:8443 with a self-signed certificate
+```
+
+`npm run tunnel` starts a free [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) (no account needed). It prints an `https://<random>.trycloudflare.com/input.html` address, and the QR codes switch to it automatically. Phones can join from any network, including mobile data. The address changes every time the tunnel starts, and anyone with the link can join. Put `cloudflared.exe` in `.tools/`, or install it on your `PATH`, or set the `CLOUDFLARED` environment variable to its location.
+
+Chrome on Android often fails on self-signed certificates with `ERR_TOO_MANY_RETRIES` (Chromium issue 40418163). Use the tunnel for parties rather than `start:https`. With `start:https`, the server generates a self-signed certificate in `.cert/` the first time it runs, and each phone has to accept the browser warning once. You can supply your own certificate with `SSL_KEY=… SSL_CERT=…`. Set `PORT` to change the port.
+
+1. Open `/output.html` on the computer that drives the projector or speakers. Click **Start display**. When Chrome asks what to share, choose **this tab** and turn on **Share tab audio**.
+2. Phones scan the QR code on the main page (`/`) or the display's start screen, or open `/input.html` directly. They tap **Start pulse sensor** and cover the rear camera and flash with a fingertip.
+3. Anyone can paste a YouTube link, or **upload an audio or video file** (up to 100 MB). Every player loads it and follows the server clock. Uploads are kept in `uploads/`; only the 20 newest are kept.
+
+To try it without phones, run `npm run simulate -- http://localhost:3000 25`. This starts 25 fake heartbeats. `npm test` runs the unit tests and a socket test with 30 clients.
+
+## Display controls
+
+| Key | Action |
+| --- | --- |
+| `1`–`7` / click | Switch visual mode (organic noise dissolve between modes). Shared with every display and phone. |
+| `K` `E` `B` `R` / click | Toggle the FX layers: Kaleidoscope, Echo, Bloom, Heart Ripple. They stack and are shared too. |
+| `M` / **♥ Heartbeat** button | Turn heartbeat mode off or on. When it's off, phone sensors are ignored and the **Tempo** slider sets the rhythm at full strength. |
+| `←` `→` | Cycle modes |
+| `H` | Hide the UI (it also hides itself after 3.5 s without mouse movement) |
+| `F` | Fullscreen |
+| `V` | Collapse the video. Playback keeps going. |
+| `P` | Play/pause for everyone |
+| `Q` | Show/hide a QR code in the corner that phones can scan to join |
+
+## Animation controls (phones)
+
+Under **Animation controls**, the phone page offers the visual mode, the FX layers and these sliders:
+
+| Slider | Effect |
+| --- | --- |
+| Tempo (40–180 BPM) | The rhythm when heartbeat mode is off or nobody is sensing. It replaces the old fixed 62 BPM idle. |
+| Beat intensity | How hard each beat hits (`uBeat`, `uPulse`) |
+| Heat | Shifts the energy value calmer or wilder |
+| Breathing | Depth of the inhale/exhale motion |
+| Motion speed | Time scale of every animation and simulation. The heartbeat itself is not affected. |
+| Audio reactivity | Gain on the FFT bands and onset detection. 0 ignores the music. |
+| Colour shift | Rotates the hue of the final image |
+
+The server holds one shared set of controls (`AnimationControls` in `server.js`). Anyone can change them, from a phone or a display, and the latest change wins. Updates are clamped and rate-limited per socket, then rebroadcast as `controls:state` at up to 20 Hz. Phones send at about 15 Hz while you drag. A control you're dragging, or changed in the last 0.7 s, ignores remote updates, so two people adjusting at once don't fight under each other's fingers. **Reset** restores the defaults for everyone. Displays smooth the values, so changes glide rather than step. The first display to connect after a server start seeds the mode and FX from its saved choice, until someone changes a control.
+
+## How it works
+
+**PPG (`public/js/pulse-detector.js`).** Each frame is drawn into a hidden 32×24 canvas, which averages the image on the GPU. The detector then takes the mean red channel and checks whether a fingertip covers the lens (the frame is bright and strongly red). The signal is cleaned up in stages:
+
+- two high-pass stages remove drift from auto-exposure and finger pressure
+- a low-pass stage smooths it, and the signal is inverted and normalised to its envelope
+- beats are picked with hysteresis and a refractory period
+- the BPM is the median of the last 8 beat-to-beat intervals, with outlier rejection
+- confidence comes from how regular those intervals are
+
+When the hardware allows it, the flash (torch) is turned on and a wake lock keeps the screen on.
+
+**Server (`server.js`).** It keeps only the latest sample from each phone and combines them on a fixed 15 Hz tick, so the work grows with the number of users (O(N)) rather than with the message rate. The combined values are a confidence-weighted BPM, the beat count, and the number of active sensors. Incoming pulses are limited to 20 Hz per socket. Payloads are clamped and validated, outbound pulse messages are `volatile`, and message compression is off. The playback clock is authoritative: `videoId`, `position`, `playing`, `serverTime`, and a 1.5 s lead-in so everyone can buffer. It is broadcast on every change and every 2 s.
+
+**Sync (`public/js/sync.js`).** Clients estimate their offset from the server clock using the lowest-round-trip `time:ping` sample. Every 250 ms, `YouTubeSync` checks the player against the server:
+
+- it re-asserts play or pause, which undoes any local pause, end, or tap
+- it hard-seeks if the player drifts more than 0.3 s
+- a transparent shield over the iframe blocks local control
+- if autoplay is blocked, it shows a "Tap to sync" button
+
+**Display (`public/js/output.js`, `public/shaders/`).** Built on WebGL2. Each pass draws one fullscreen triangle. Uniform types are read from the compiled program. Ping-pong render targets use float or half-float formats. Pulse values reach the shaders through these uniforms:
+
+- `uBpm`
+- `uPulse`: a "lub-dub" waveform
+- `uBeat`: a decaying impulse
+- `uBreath`: inhale and exhale, 4 beats per breath
+- `uEnergy`
+- `uStrength`: how much real sensor data is present
+
+A local oscillator runs at the room's BPM, and real beats from phones nudge its phase. That keeps a steady rhythm even when 30 hearts are out of phase. With no phones connected, or with heartbeat mode off, it runs at the Tempo control (default 62 BPM). Audio reaches the shaders as `uBass`, `uMid`, `uTreble`, `uLevel` and `uOnset`, plus a 64-bin log-spaced FFT texture `uFFT`. A slow automatic gain control keeps quiet and loud tracks equally lively. Render resolution adapts to keep the frame rate smooth.
+
+| Mode | Pulse → | Audio FFT → |
+| --- | --- | --- |
+| Domain Warp (simplex fBm) | warp amplitude, warp speed, inhale/exhale zoom | palette phase shift, glowing veins, spores |
+| Reaction-Diffusion (Gray-Scott) | heat: simulation steps per frame, moves from coral/mycelium toward mitosis, beats seed new cells | iridescent thin-film colouring of the cells |
+| Fluid Tracers (stable fluids + vorticity) | each beat pushes the fluid from rotating emitters, a breathing "lung" at the centre | onsets drop vivid dye coloured by the strongest band |
+| Julia Set | the `c` constant orbits, breathes and folds on beats | bass drives contrast and lighting, treble the highlights, mids the hue |
+| Mandelbrot | zoom speed (surges on beats), an endless zoom-in that crossfades into a new hotspot before it runs out of floating-point precision | each colour band is lit by its own FFT bin |
+| Julia Fluid (Julia set + stable fluids) | moves the `c` constant, and beats push the fluid, whose currents warp the fractal | the fractal's edge sheds rainbow ink into the fluid (more with louder music), onsets drop dye |
+| Fractal Flight (ray-marched 3D Apollonian fractal) | camera speed and surges on beats, and the geometry "breathes" with the room | surface colour bands come from FFT bins, bass pumps the glow in the gaps, treble adds highlights |
+
+**FX layers** form a post-processing chain: scene, then kaleidoscope and ripple, then echo, then bloom, then the screen. They work on any mode, and when all are off the chain is skipped entirely.
+
+| Layer | Pulse → | Audio → |
+| --- | --- | --- |
+| Kaleidoscope | 6, 8 or 10 slices as the room heats up, and the slices breathe | — |
+| Echo (video feedback) | trail length follows the heart rate, and beats surge the zoom | bass adds zoom, treble adds a hue drift on the trails |
+| Bloom | beats flash the glow | louder music lowers the threshold and raises the glow |
+| Heart Ripple | every heartbeat sends out a shockwave ring | — |
+
+### Why the display needs an audio source
+
+The YouTube player is a cross-origin iframe, so the Web Audio API cannot read its audio directly. The display offers these sources. Each one feeds only an `AnalyserNode` and is not played a second time:
+
+| Source | How | Trade-off |
+| --- | --- | --- |
+| **Uploaded file** | Automatic. Uploaded audio or video is served from this server, so the display analyses it directly with `createMediaElementSource`. | None: no prompt, no indicator, exact audio. Overrides the source below while a file is playing. |
+| **Tab audio** | `getDisplayMedia` captures this tab. Choose the tab and enable "Share tab audio". | Chrome draws a coloured outline around the shared tab. A page cannot remove it. |
+| **System audio** | Choose "Entire screen" and tick "Also share system audio" (Windows and ChromeOS). | No tab outline. Click **Hide** on Chrome's "sharing your screen" bar. |
+| **Virtual cable** | The display finds a VB-Audio, VoiceMeeter or BlackHole recording device automatically. | Exact PC audio with no prompt and no indicator. Needs a one-time install (see below). |
+| **Input device** | Uses `getUserMedia` with a device you choose. | No prompt after the first time. With **Stereo Mix** it hears exactly what the PC plays. A microphone hears the room's speakers instead. |
+
+To get Stereo Mix on Windows, open **Sound settings → More sound settings → Recording**. Right-click the list and choose **Show Disabled Devices**, then enable **Stereo Mix**. If your sound driver doesn't offer it, install the free [VB-Audio Virtual Cable](https://vb-audio.com/Cable/). Set **CABLE Input** as Chrome's or Windows' audio output, and in **CABLE Output → Properties → Listen**, tick "Listen to this device" so you still hear it. The display automatically selects loopback devices and remembers your source and device.
+
+## Notes
+
+- Phones start **muted** by default, so 30 phones don't echo each other. Each person can turn sound on.
+- Mobile browsers require HTTPS before a page can use the camera (localhost is the only exception).
+- Websites can turn on the camera flash only in **Chrome on Android** or **Safari on iOS 17.4+**. Firefox doesn't support it. Without a flash, hold your fingertip over the camera in front of a bright lamp. The **Camera diagnostics** section on the phone page shows what the browser reports, and the server console logs the same information.
+- Some videos don't allow embedding. Players report this, and you can submit another link.

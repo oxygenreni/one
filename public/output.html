@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulse · Display</title>
+  <link rel="stylesheet" href="css/output.css">
+</head>
+<body>
+  <canvas id="gl"></canvas>
+
+  <div id="start" class="start">
+    <div class="start-card">
+      <h1>Pulse</h1>
+      <p>A room full of heartbeats, rendered live.</p>
+      <label class="field">Audio analysis source
+        <select id="startAudioSrc">
+          <option value="tab">This tab's audio (shows a coloured outline)</option>
+          <option value="screen">Entire screen + system audio (no outline)</option>
+          <option value="cable">Virtual cable (VB-Audio, exact PC audio, no prompt)</option>
+          <option value="mic">Input device (Stereo Mix / mic / line-in, no prompt)</option>
+          <option value="off">None (pulse only)</option>
+        </select>
+      </label>
+      <label class="field" id="startAudioDeviceField">Input device
+        <select id="startAudioDevice"><option value="">Default input</option></select>
+      </label>
+      <button id="startBtn" class="btn primary" type="button">Start display</button>
+      <p class="hint"><b>Uploaded files</b> (⬆ File, or from a phone) are analysed directly, so no source is needed for them.</p>
+      <p class="hint" id="sourceHint"></p>
+      <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page" width="180" height="180">
+      <p class="hint">Phones scan to join, or open <span id="joinUrl" class="mono">…/input.html</span></p>
+      <p id="fatal" class="fatal" hidden></p>
+    </div>
+  </div>
+
+  <!-- Join QR shown on the visuals (toggle with Q); outside .ui so it doesn't auto-hide. -->
+  <div id="qrCorner" class="qr-corner" hidden>
+    <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page">
+    <span>Scan to add your heartbeat ♥</span>
+  </div>
+
+  <div id="ui" class="ui">
+    <div class="hud hud-left">
+      <span id="conn" class="dot"></span>
+      <span>♥ <b id="hudBpm">--</b> <span id="hudMode">BPM</span></span>
+      <span><b id="hudUsers">0</b> hearts</span>
+      <button id="hbBtn" class="btn small hb-btn" type="button">♥ Heartbeat on</button>
+      <span class="muted" id="hudFps"></span>
+    </div>
+
+    <div class="hud hud-right">
+      <canvas id="spectrum" width="128" height="22" title="Live FFT"></canvas>
+      <select id="audioSrc" aria-label="Audio source">
+        <option value="tab">Tab audio</option>
+        <option value="screen">System audio</option>
+        <option value="cable">Virtual cable</option>
+        <option value="mic">Input device</option>
+        <option value="off">Off</option>
+      </select>
+      <select id="audioDevice" aria-label="Audio input device" hidden><option value="">Default input</option></select>
+      <button id="audioBtn" class="btn small" type="button">Connect</button>
+      <span id="audioStatus" class="muted">audio off</span>
+      <span id="fileAudioBadge" class="badge" title="The uploaded file is analysed directly — no capture needed" hidden>♪ file audio · direct</span>
+    </div>
+
+    <nav id="fxBar" class="modes fx-bar" aria-label="Effect layers"></nav>
+    <nav id="modes" class="modes" aria-label="Visual mode"></nav>
+
+    <div id="dock" class="dock">
+      <div class="dock-player">
+        <div id="player"></div>
+        <video id="filePlayer" class="file-player" playsinline hidden></video>
+        <div class="player-shield"></div>
+      </div>
+      <div class="dock-bar">
+        <span id="nowPlaying" class="muted">nothing playing</span>
+        <span class="dock-buttons">
+          <button id="playPause" class="btn small" type="button" title="Play / pause for everyone (P)">❚❚</button>
+          <button id="restart" class="btn small" type="button" title="Restart for everyone">⟲</button>
+          <button id="dockToggle" class="btn small" type="button" title="Hide video (V)">▾</button>
+        </span>
+      </div>
+      <form id="ytForm" class="dock-form" autocomplete="off">
+        <input id="ytUrl" type="url" placeholder="YouTube URL" aria-label="YouTube URL">
+        <button class="btn small" type="submit">Load</button>
+        <label class="btn small" title="Upload an audio or video file (max 100 MB) — its audio drives the visuals directly">⬆ File
+          <input id="mediaFile" type="file" accept="audio/*,video/*" hidden>
+        </label>
+      </form>
+    </div>
+
+    <div class="keys muted">1–7 modes · ←/→ cycle · K/E/B/R effects · M heartbeat on/off · Q join QR · H hide UI · F fullscreen · V video · P play/pause</div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/output.js"></script>
+</body>
+</html>

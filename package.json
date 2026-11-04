@@ -1,0 +1,26 @@
+{
+  "name": "pulse-visualizer",
+  "version": "1.0.0",
+  "description": "Collective heartbeat + synchronized YouTube audio driving real-time WebGL shaders.",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "start:https": "node server.js --https",
+    "tunnel": "node server.js --tunnel",
+    "test": "node --test test/",
+    "simulate": "node scripts/simulate.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "selfsigned": "^2.4.1",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}

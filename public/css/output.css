@@ -1,0 +1,104 @@
+:root {
+  --fg: #f4ecff;
+  --muted: rgba(244, 236, 255, 0.6);
+  --glass: rgba(14, 8, 20, 0.55);
+  --line: rgba(255, 255, 255, 0.12);
+  --accent: #ff3d7f;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; color: var(--fg); overflow: hidden;
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+#gl { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, Consolas, monospace; }
+[hidden] { display: none !important; }
+
+.btn {
+  appearance: none; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.08);
+  color: var(--fg); border-radius: 10px; padding: 8px 14px; font: inherit; cursor: pointer;
+  transition: background .2s, border-color .2s;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.16); }
+.btn.small { padding: 4px 10px; font-size: 13px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; padding: 12px 18px; width: 100%; }
+
+select, input {
+  background: rgba(0, 0, 0, 0.4); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 8px; padding: 4px 8px; font: inherit;
+}
+
+/* Start overlay */
+.start { position: fixed; inset: 0; display: grid; place-items: center; z-index: 20;
+  background: radial-gradient(circle at 50% 40%, rgba(60, 10, 50, 0.6), rgba(0, 0, 0, 0.85)); }
+.start-card { width: min(420px, 90vw); padding: 28px; border-radius: 20px; background: var(--glass);
+  border: 1px solid var(--line); backdrop-filter: blur(14px); display: grid; gap: 14px; }
+.start-card h1 { margin: 0; letter-spacing: .2em; text-transform: uppercase; font-weight: 300; }
+.start-card p { margin: 0; }
+.field { display: grid; gap: 6px; color: var(--muted); }
+.hint { color: var(--muted); font-size: 13px; }
+.fatal { color: #ff8a6b; }
+.qr { display: block; justify-self: center; width: 180px; height: 180px; background: #fff; border-radius: 10px; padding: 4px; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(124, 247, 212, 0.18); color: #7cf7d4; white-space: nowrap; }
+.file-player { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.dock-form label.btn { display: inline-flex; align-items: center; }
+
+/* Persistent join QR in the corner of the visuals */
+.qr-corner { position: fixed; left: 18px; bottom: 60px; z-index: 11; display: grid; gap: 6px; justify-items: center;
+  padding: 10px; border-radius: 14px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px);
+  font-size: 13px; }
+.qr-corner .qr { width: 150px; height: 150px; }
+
+/* Overlay UI */
+.ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; transition: opacity .6s; }
+.ui > * { pointer-events: auto; }
+.ui.idle, .ui.hidden { opacity: 0; }
+.ui.idle > *, .ui.hidden > * { pointer-events: none; }
+.ui.idle { cursor: none; }
+
+.hud { position: absolute; top: 14px; display: flex; gap: 14px; align-items: center; padding: 8px 14px;
+  background: var(--glass); border: 1px solid var(--line); border-radius: 999px; backdrop-filter: blur(10px); }
+.hud-left { left: 14px; }
+.hb-btn { border-radius: 999px; border-color: rgba(255, 61, 127, 0.6); color: #ff9dbf; }
+.hb-btn.off { border-color: var(--line); color: var(--muted); }
+.hud-right { right: 14px; gap: 8px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #ff8a6b; display: inline-block; }
+.dot.on { background: #7cf7d4; box-shadow: 0 0 8px #7cf7d4; }
+#spectrum { width: 128px; height: 22px; }
+
+.modes { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 6px;
+  padding: 6px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px); }
+.modes button { appearance: none; border: 0; background: transparent; color: var(--muted); font: inherit;
+  padding: 8px 14px; border-radius: 999px; cursor: pointer; white-space: nowrap; transition: background .25s, color .25s; }
+.modes button:hover { color: var(--fg); }
+.modes button.active { background: rgba(255, 255, 255, 0.92); color: #120a18; }
+.modes button kbd { font: inherit; opacity: .5; margin-right: 6px; }
+.fx-bar { bottom: 76px; padding: 4px; }
+.fx-bar button { padding: 5px 12px; font-size: 13px; }
+.fx-bar button.active { background: linear-gradient(90deg, #ff3d7f, #7c5cff); color: #fff; }
+.fx-label { color: var(--muted); font-size: 12px; letter-spacing: .1em; padding: 0 6px 0 10px; align-self: center; }
+
+.dock { position: absolute; right: 14px; bottom: 80px; width: 300px; padding: 8px; border-radius: 14px;
+  background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px); display: grid; gap: 6px; }
+.dock-player { position: relative; aspect-ratio: 16 / 9; border-radius: 8px; overflow: hidden; background: #000; }
+.dock-player iframe, .dock-player #player { position: absolute; inset: 0; width: 100%; height: 100%; }
+.player-shield { position: absolute; inset: 0; }
+/* Collapsed video keeps its full size (invisible) so YouTube keeps playing audio and sync continues. */
+.dock.collapsed .dock-player { position: fixed; right: 0; bottom: 0; width: 320px; height: 180px;
+  opacity: 0; pointer-events: none; z-index: -1; }
+.dock-bar { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.dock-bar #nowPlaying { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.dock-buttons { display: flex; gap: 4px; flex-shrink: 0; }
+.dock-form { display: flex; gap: 6px; }
+.dock-form input { flex: 1; min-width: 0; }
+
+.keys { position: absolute; left: 14px; bottom: 30px; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .modes { flex-wrap: wrap; justify-content: center; width: calc(100vw - 28px); border-radius: 18px; }
+  .dock { bottom: 140px; width: 240px; }
+  .keys { display: none; }
+}
