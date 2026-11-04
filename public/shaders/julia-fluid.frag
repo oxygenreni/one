@@ -70,12 +70,19 @@ void main() {
     float ang = atan(p.y, p.x) / TAU;
     vec3 ink = 0.5 + 0.5 * cos(TAU * (uHue + ang + 0.2 * uMid + vec3(0.0, 0.33, 0.67)));
     ink = pow(ink, vec3(1.8));
-    fragColor = vec4(dye + ink * edge * uInject, 1.0);
+    // Ink of many hues piling up would sum to white, so scale down instead of clipping: the
+    // brightest channel stays at 1 and the colour keeps its hue.
+    vec3 outc = dye + ink * edge * uInject;
+    outc /= max(1.0, max(outc.r, max(outc.g, outc.b)));
+    fragColor = vec4(outc, 1.0);
     return;
   }
 
   // The fractal body sits on top of the fluid (mostly hiding the ink behind it), with a crisp
   // bright outline, so its shape stays readable while the trails swirl around it.
+  // Loud music and strong beats push the fractal's colour far past 1; scale it back by its
+  // brightest channel (instead of letting it clip to white) so its colour bands stay visible.
+  jc /= max(1.0, max(jc.r, max(jc.g, jc.b)) * 0.8);
   vec3 col = mix(dye * 0.7, jc * 1.1, mask * 0.85);
   col += line * vec3(1.0, 0.97, 0.92) * (0.6 + 0.8 * uTreble);
   // Chromatic shimmer where the flow is fast.

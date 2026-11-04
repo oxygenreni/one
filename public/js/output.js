@@ -350,7 +350,8 @@
 
     // Dancers heat the room up: the harder they move, the wilder every mode gets.
     pulse.motion += (pulse.targetMotion - pulse.motion) * lerpK(dt, 0.5);
-    const heat = clamp((pulse.bpm - 55) / 60, 0, 1) * (0.4 + 0.6 * pulse.strength);
+    // 50 BPM is calm, 170 is flat out, so dance tempos (120-130) sit in the middle with room to go.
+    const heat = clamp((pulse.bpm - 50) / 120, 0, 1) * (0.4 + 0.6 * pulse.strength);
     pulse.energy += (clamp(heat + 0.25 * pulse.beat + 0.7 * pulse.motion + ctl.heat, 0, 1) - pulse.energy) * lerpK(dt, 0.6);
   }
 
@@ -1028,7 +1029,7 @@
             uDye: f.dye.read.tex,
             uVelocity: f.vel.read.tex,
             uWarp: JF_WARP,
-            uInject: d * (0.6 + 1.2 * audio.level + 1.0 * pulse.beat),
+            uInject: d * (0.6 + 1.2 * audio.level + 0.4 * pulse.beat),
           }, f.dye.write);
           f.dye.swap();
         };
