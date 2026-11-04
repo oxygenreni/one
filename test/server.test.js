@@ -9,7 +9,7 @@ const { io: ioc } = require('socket.io-client');
 
 const tmpUploads = fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-uploads-'));
 process.env.UPLOAD_DIR = tmpUploads;
-const { createApp, parseYouTubeId, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange } = require('../server.js');
+const { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange } = require('../server.js');
 
 test.after(() => fs.rmSync(tmpUploads, { recursive: true, force: true }));
 
@@ -323,4 +323,50 @@ test('socket flow: host lock, PIN, build info and per-phone colours', async (t) 
   const modeSet = nextState(phone2.c, (s) => s.mode === 5);
   phone.c.emit('controls:set', { mode: 5 });
   await modeSet;
+});
+
+test('parseSpotify accepts single songs and explains everything else', () => {
+  const id = '4cOdK2wGLETKBW3PvgPWqT';
+  for (const s of [
+    `https://open.spotify.com/track/${id}`,
+    `https://open.spotify.com/track/${id}?si=abc123`,
+    `open.spotify.com/intl-de/track/${id}`,
+    `https://open.spotify.com/embed/track/${id}`,
+    `spotify:track:${id}`,
+  ]) {
+    assert.deepEqual(parseSpotify(s), { type: 'track', id, uri: `spotify:track:${id}` }, s);
+  }
+  assert.equal(parseSpotify(`https://open.spotify.com/episode/${id}`).uri, `spotify:episode:${id}`);
+  assert.match(parseSpotify(`https://open.spotify.com/playlist/${id}`).error, /single song, not a playlist/);
+  assert.match(parseSpotify(`https://open.spotify.com/album/${id}`).error, /not an album/);
+  assert.equal(parseSpotify('https://youtu.be/dQw4w9WgXcQ'), null);
+  assert.equal(parseSpotify('https://evil.example/track/' + id), null);
+  assert.equal(parseSpotify('spotify:track:short'), null);
+});
+
+test('socket flow: media:submit plays the chosen source', async (t) => {
+  const { server, io } = createApp();
+  await new Promise((r) => server.listen(0, r));
+  const url = `http://localhost:${server.address().port}`;
+  const c = ioc(url, { transports: ['websocket'], forceNew: true });
+  t.after(() => {
+    c.close();
+    io.close();
+    server.close();
+  });
+  await new Promise((r) => c.on('connect', r));
+  c.emit('hello', { role: 'output' });
+  const id = '4cOdK2wGLETKBW3PvgPWqT';
+
+  const wrong = await c.timeout(2000).emitWithAck('media:submit', { source: 'youtube', url: `https://open.spotify.com/track/${id}` });
+  assert.match(wrong.error, /Switch to Spotify/);
+  const wrong2 = await c.timeout(2000).emitWithAck('media:submit', { source: 'spotify', url: 'https://youtu.be/dQw4w9WgXcQ' });
+  assert.match(wrong2.error, /Switch to YouTube/);
+
+  const state = new Promise((resolve) => c.on('yt:state', (s) => s.media && s.media.kind === 'spotify' && resolve(s)));
+  const ok = await c.timeout(2000).emitWithAck('media:submit', { source: 'spotify', url: `https://open.spotify.com/track/${id}?si=x` });
+  assert.equal(ok.ok, true);
+  const s = await state;
+  assert.equal(s.media.uri, `spotify:track:${id}`);
+  assert.equal(s.videoId, null);
 });

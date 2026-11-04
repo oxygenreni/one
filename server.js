@@ -150,6 +150,59 @@ function parseYouTubeId(input) {
   return id && YT_ID_RE.test(id) ? id : null;
 }
 
+const SPOTIFY_ID_RE = /^[A-Za-z0-9]{22}$/;
+const SPOTIFY_PLAYABLE = new Set(['track', 'episode']);
+
+/**
+ * Parses a Spotify track/episode link or URI. Returns { type, id, uri }, { error } for links that
+ * aren't a single track (albums and playlists would advance on their own and fall out of sync),
+ * or null when it isn't a Spotify link at all.
+ */
+function parseSpotify(input) {
+  if (typeof input !== 'string') return null;
+  const s = input.trim();
+  if (s.length === 0 || s.length > 500) return null;
+  let type = null;
+  let id = null;
+  const uri = s.match(/^spotify:([a-z]+):([A-Za-z0-9]+)$/);
+  if (uri) {
+    [, type, id] = uri;
+  } else {
+    let url;
+    try {
+      url = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+    } catch {
+      return null;
+    }
+    if (url.hostname !== 'open.spotify.com' && url.hostname !== 'play.spotify.com') return null;
+    // Paths look like /track/ID, /intl-de/track/ID or /embed/track/ID.
+    const m = url.pathname.match(/^(?:\/intl-[a-z-]+)?(?:\/embed)?\/([a-z]+)\/([A-Za-z0-9]+)/i);
+    if (!m) return { error: 'That Spotify link isn\'t a track. Open the song and use Share → Copy song link.' };
+    [, type, id] = m;
+  }
+  type = type.toLowerCase();
+  if (!SPOTIFY_PLAYABLE.has(type)) {
+    return { error: `Paste a single song, not ${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}. Open the song and use Share → Copy song link.` };
+  }
+  if (!SPOTIFY_ID_RE.test(id)) return null;
+  return { type, id, uri: `spotify:${type}:${id}` };
+}
+
+/** Looks up a Spotify track's title via the public oEmbed endpoint; resolves null on any failure. */
+async function fetchSpotifyTitle(uri) {
+  const [, type, id] = uri.split(':');
+  try {
+    const r = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(`https://open.spotify.com/${type}/${id}`)}`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return typeof j.title === 'string' ? j.title.slice(0, 120) : null;
+  } catch {
+    return null;
+  }
+}
+
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
@@ -160,7 +213,8 @@ function finite(v, fallback = 0) {
 
 /**
  * Authoritative playback clock. Positions are seconds; times are server ms.
- * `media` is either { kind: 'youtube', id } or { kind: 'file', id, url, title, mime }.
+ * `media` is { kind: 'youtube', id }, { kind: 'spotify', id, uri, title } or
+ * { kind: 'file', id, url, title, mime }.
  */
 class PlaybackState {
   constructor(now = Date.now) {
@@ -684,20 +738,46 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       console.log(`[diag ${socket.id.slice(0, 6)}] ${ua}\n  ${lines.join('\n  ')}`);
     });
 
-    socket.on('yt:submit', (url, ack) => {
-      const reply = typeof ack === 'function' ? ack : () => {};
+    /** Loads a YouTube or Spotify link (the sender picks which) for everyone. */
+    const submit = (source, url, reply) => {
       const t = Date.now();
       if (!mediaAllowed()) return reply({ ok: false, error: 'The host has locked the music. Ask them to unlock it.' });
       if (t - lastSubmit < VIDEO_SUBMIT_COOLDOWN_MS) {
         return reply({ ok: false, error: 'Please wait a moment before submitting again.' });
       }
+      if (source === 'spotify') {
+        const sp = parseSpotify(url);
+        if (!sp) {
+          return reply({ ok: false, error: parseYouTubeId(url) ? 'That\'s a YouTube link. Switch to YouTube.' : 'That does not look like a Spotify song link.' });
+        }
+        if (sp.error) return reply({ ok: false, error: sp.error });
+        lastSubmit = t;
+        const media = { kind: 'spotify', id: sp.id, uri: sp.uri, title: 'Spotify' };
+        playback.load(media);
+        broadcastState();
+        reply({ ok: true, media });
+        fetchSpotifyTitle(sp.uri).then((title) => {
+          if (title && playback.media === media) {
+            media.title = title;
+            broadcastState();
+          }
+        });
+        return;
+      }
       const id = parseYouTubeId(url);
-      if (!id) return reply({ ok: false, error: 'That does not look like a YouTube URL.' });
+      if (!id) {
+        const sp = parseSpotify(url);
+        return reply({ ok: false, error: sp ? 'That\'s a Spotify link. Switch to Spotify.' : 'That does not look like a YouTube URL.' });
+      }
       lastSubmit = t;
       playback.load(id);
       broadcastState();
       reply({ ok: true, videoId: id });
-    });
+    };
+    socket.on('yt:submit', (url, ack) => submit('youtube', url, typeof ack === 'function' ? ack : () => {}));
+    socket.on('media:submit', (data, ack) =>
+      submit(data && data.source === 'spotify' ? 'spotify' : 'youtube', data && data.url, typeof ack === 'function' ? ack : () => {})
+    );
 
     socket.on('yt:control', (action) => {
       const t = Date.now();
@@ -759,7 +839,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       });
     }, INPUT_SUMMARY_MS),
     setInterval(() => {
-      if (playback.videoId) broadcastState();
+      if (playback.videoId || (playback.media && playback.media.kind === 'spotify')) broadcastState();
     }, SYNC_HEARTBEAT_MS),
     setInterval(() => {
       if (playback.checkEnded()) broadcastState();
@@ -849,4 +929,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { createApp, parseYouTubeId, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange };
+module.exports = { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange };

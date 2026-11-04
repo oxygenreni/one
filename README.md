@@ -25,7 +25,7 @@ Chrome on Android often fails on self-signed certificates with `ERR_TOO_MANY_RET
 
 1. Open `/output.html` on the computer that drives the projector or speakers. Click **Start display**. When Chrome asks what to share, choose **this tab** and turn on **Share tab audio**.
 2. Phones scan the QR code on the main page (`/`) or the display's start screen, or open `/input.html` directly. They tap **Start pulse sensor** and cover the rear camera and flash with a fingertip.
-3. Anyone can paste a YouTube link, or **upload an audio or video file** (up to 100 MB). Every player loads it and follows the server clock. Uploads are kept in `uploads/`; only the 20 newest are kept.
+3. Anyone can paste a YouTube or Spotify link (see [Spotify](#spotify)), or **upload an audio or video file** (up to 100 MB). Every player loads it and follows the server clock. Uploads are kept in `uploads/`; only the 20 newest are kept.
 
 To try it without phones, run `npm run simulate -- http://localhost:3000 25`. This starts 25 fake heartbeats. `npm test` runs the unit tests and a socket test with 30 clients.
 
@@ -75,6 +75,16 @@ The server enforces the lock (`canChange` in `server.js`); the phone page only g
 ### Your own heartbeat
 
 Every phone gets its own colour (golden-ratio hues, so neighbours differ). The heart icon on the phone shows it. On the display, each phone with a good signal has a glowing dot in that colour, and each of its beats sends out a ring from it. This is the **Hearts** FX layer, on by default and limited to 32 at once. The server forwards per-phone beat counts in `pulse:agg` as `hearts: [[n, hue, beats, confidence], …]`. The rings are drawn last in `fx-final.frag`, after the colour shift, so each phone's colour matches what it shows.
+
+### Spotify
+
+Both link boxes (phone and display) have a **YouTube / Spotify** switch. Pasting an obvious link of the other kind flips it for you. Spotify links must be a single **song** (or podcast episode), from Share → Copy song link. Albums and playlists are refused, because Spotify would move to the next track on its own and break the sync. The server looks up the song title through Spotify's public oEmbed endpoint.
+
+- **Log in to Spotify in the display's browser.** The embedded player plays full songs only for a logged-in browser, otherwise 30-second previews. When a preview runs out, the display says so and stays quiet instead of looping.
+- **Phones don't play Spotify while muted.** The embed has no volume control, so a muted phone shows the title and leaves the sound to the display. Turning sound on loads the player on that phone. It needs a Spotify login for full songs too.
+- **Sound for the visuals:** Spotify's audio is copy-protected and comes from another site, so the page can't analyse it directly. Use **Virtual cable** or **Input device → Stereo Mix** on the display. Tab audio may work but isn't guaranteed. If a Spotify song is playing and the display hears nothing for 4 s, a yellow hint appears next to the spectrum.
+- Sync is looser than YouTube's: Spotify reports its position less often and seeks coarsely, so it corrects only when it drifts more than 0.8 s.
+- Only displays report a Spotify song's length to the server, and only if it's longer than a preview, so a logged-out phone can't cut the song short for everyone.
 
 ### Out-of-date server warning
 

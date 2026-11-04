@@ -65,6 +65,15 @@ select, input {
 .hb-btn { border-radius: 999px; border-color: rgba(255, 61, 127, 0.6); color: #ff9dbf; }
 .hb-btn.off { border-color: var(--line); color: var(--muted); }
 .lock-btn.limited, .lock-btn.locked { border-color: #ffd36b; color: #ffd36b; }
+.badge.warn { background: rgba(255, 211, 107, 0.18); color: #ffd36b; cursor: help; }
+
+.spotify-wrap { position: absolute; inset: 0; background: #121212; }
+.spotify-wrap iframe { width: 100%; height: 100%; border: 0; }
+.src-toggle { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: rgba(0, 0, 0, 0.4); border: 1px solid var(--line); }
+.src-toggle button { flex: 1; appearance: none; border: 0; border-radius: 7px; padding: 4px 8px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.src-toggle button[data-source="youtube"].active { background: #ff0033; color: #fff; }
+.src-toggle button[data-source="spotify"].active { background: #1ed760; color: #04170a; }
 
 /* Stays visible even when the rest of the UI auto-hides. */
 .server-banner { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 30; display: flex; gap: 12px;
@@ -96,7 +105,8 @@ select, input {
 .dock.collapsed .dock-player { position: fixed; right: 0; bottom: 0; width: 320px; height: 180px;
   opacity: 0; pointer-events: none; z-index: -1; }
 .dock-bar { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
-.dock-bar #nowPlaying { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.dock { grid-template-columns: minmax(0, 1fr); } /* long now-playing text must ellipsize, not widen the dock */
+.dock-bar #nowPlaying { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .dock-buttons { display: flex; gap: 4px; flex-shrink: 0; }
 .dock-form { display: flex; gap: 6px; }
 .dock-form input { flex: 1; min-width: 0; }

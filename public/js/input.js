@@ -72,11 +72,14 @@
   const yt = new MediaSync('player', socket, timeSync, {
     muted: true,
     mediaElement: $('filePlayer'),
+    spotifyElement: $('spotifyWrap'),
+    shield: $('shield'),
     onBlocked: (b) => (ui.tapSync.hidden = !b),
     onStatus: (s) => {
-      const isAudioFile = s.kind === 'file' && s.mime && s.mime.startsWith('audio/');
-      $('audioOnly').hidden = !isAudioFile;
-      if (isAudioFile) $('audioTitle').textContent = s.title || '';
+      // Audio files, and Spotify while this phone is muted (the embed can't be muted), show a title card.
+      const card = (s.kind === 'file' && s.mime && s.mime.startsWith('audio/')) || (s.kind === 'spotify' && !!s.note);
+      $('audioOnly').hidden = !card;
+      if (card) $('audioTitle').textContent = s.title || '';
       if (s.error) {
         ui.ytStatus.textContent = s.error;
         return;
@@ -86,11 +89,17 @@
         ui.ytStatus.textContent = 'nothing playing';
         return;
       }
+      if (s.note) {
+        ui.ytStatus.textContent = s.note;
+        return;
+      }
       const t = formatTime(s.position);
-      const name = s.kind === 'file' ? ` · ${s.title}` : '';
+      const name = s.kind === 'youtube' ? '' : ` · ${s.title}`;
       ui.ytStatus.textContent = `${s.playing ? '▶' : '❚❚'} ${t}${name} · synced${Math.abs(s.drift) > 0.3 ? ' (correcting)' : ''}`;
     },
   });
+  const sourceButtons = [...document.querySelectorAll('.src-toggle button')];
+  const linkSource = sourcePicker(sourceButtons, ui.ytUrl);
 
   $('mediaFile').addEventListener('change', async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -121,10 +130,16 @@
     if (!url) return;
     yt.unlock();
     setMsg('Sending…');
-    socket.timeout(5000).emit('yt:submit', url, (err, res) => {
+    const source = linkSource();
+    socket.timeout(5000).emit('media:submit', { source, url }, (err, res) => {
       if (err) return setMsg('Server did not respond. Try again.', 'error');
       if (!res.ok) return setMsg(res.error, 'error');
-      setMsg('Queued — starting on every screen.', 'ok');
+      setMsg(
+        source === 'spotify'
+          ? 'Starting on the display. Spotify plays full songs only when logged in, otherwise 30-second previews.'
+          : 'Queued — starting on every screen.',
+        'ok'
+      );
       ui.ytUrl.value = '';
     });
   });
@@ -325,7 +340,7 @@
     lock.textContent = lockLevel() === 'limited'
       ? '🔒 The host has locked mode, effects and music. You can still use the sliders.'
       : '🔒 The host has locked the controls and music.';
-    ui.ytForm.querySelectorAll('input, button').forEach((el) => (el.disabled = !mediaAllowed()));
+    [...ui.ytForm.querySelectorAll('input, button'), ...sourceButtons].forEach((el) => (el.disabled = !mediaAllowed()));
     $('mediaFile').disabled = !mediaAllowed();
     $('mediaFile').parentElement.classList.toggle('disabled', !mediaAllowed());
     const manual = anim.heartbeat === false;

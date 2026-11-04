@@ -63,6 +63,7 @@
       <button id="audioBtn" class="btn small" type="button">Connect</button>
       <span id="audioStatus" class="muted">audio off</span>
       <span id="fileAudioBadge" class="badge" title="The uploaded file is analysed directly — no capture needed" hidden>♪ file audio · direct</span>
+      <span id="spotifyHint" class="badge warn" title="Spotify's audio can't be read by the page. Capture what the PC plays instead: Virtual cable or Stereo Mix (Input device) work best." hidden>Spotify: pick Virtual cable or Stereo Mix for the visuals</span>
     </div>
 
     <nav id="fxBar" class="modes fx-bar" aria-label="Effect layers"></nav>
@@ -72,7 +73,8 @@
       <div class="dock-player">
         <div id="player"></div>
         <video id="filePlayer" class="file-player" playsinline hidden></video>
-        <div class="player-shield"></div>
+        <div id="spotifyWrap" class="spotify-wrap" hidden></div>
+        <div id="shield" class="player-shield"></div>
       </div>
       <div class="dock-bar">
         <span id="nowPlaying" class="muted">nothing playing</span>
@@ -82,8 +84,12 @@
           <button id="dockToggle" class="btn small" type="button" title="Hide video (V)">▾</button>
         </span>
       </div>
+      <div class="src-toggle" role="group" aria-label="Link type">
+        <button type="button" data-source="youtube">▶ YouTube</button>
+        <button type="button" data-source="spotify">● Spotify</button>
+      </div>
       <form id="ytForm" class="dock-form" autocomplete="off">
-        <input id="ytUrl" type="url" placeholder="YouTube URL" aria-label="YouTube URL">
+        <input id="ytUrl" type="text" placeholder="Paste a YouTube link" aria-label="Song or video link">
         <button class="btn small" type="submit">Load</button>
         <label class="btn small" title="Upload an audio or video file (max 100 MB) — its audio drives the visuals directly">⬆ File
           <input id="mediaFile" type="file" accept="audio/*,video/*" hidden>

@@ -383,8 +383,18 @@
       audio.bins.fill(0);
     }
 
+    // Spotify can't be analysed directly: hint at a capture source if nothing is being heard.
+    const rawLevel = Math.max(bass, mid, treble);
+    audio.silentFor = analyser && rawLevel > 0.03 ? 0 : (audio.silentFor || 0) + dt;
+    const exp = yt.expected();
+    const spotifyDeaf = yt.kind === 'spotify' && !!exp && exp.playing && audio.silentFor > 4;
+    if (spotifyDeaf !== audio.spotifyDeaf) {
+      audio.spotifyDeaf = spotifyDeaf;
+      $('spotifyHint').hidden = !spotifyDeaf;
+    }
+
     // Slow automatic gain so quiet and loud tracks both drive the visuals fully.
-    const raw = Math.max(bass, mid, treble);
+    const raw = rawLevel;
     audio.peak = Math.max(raw, audio.peak * Math.exp(-dt / 6), 0.08);
     const g = ctl.audio / audio.peak; // the audio-reactivity control scales everything, including onsets
     const k = lerpK(dt, 0.08);
@@ -1385,9 +1395,15 @@
   const yt = new MediaSync('player', socket, timeSync, {
     muted: false,
     mediaElement: $('filePlayer'),
+    spotifyElement: $('spotifyWrap'),
+    shield: $('shield'),
+    reportSpotifyDuration: true,
     onStatus: (s) => {
       if (s.error) $('nowPlaying').textContent = s.error;
       else if (!s.kind) $('nowPlaying').textContent = 'nothing playing';
+      else if (s.note) $('nowPlaying').textContent = s.note;
+      // Spotify sometimes refuses to start on its own; its play button is clickable then.
+      else if (s.kind === 'spotify' && yt.blocked) $('nowPlaying').textContent = 'Click ▶ in the Spotify player to start';
       else {
         const sec = Math.floor(s.position || 0);
         $('nowPlaying').textContent = `${s.playing ? '▶' : '❚❚'} ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')} · ${s.title}`;
@@ -1396,6 +1412,7 @@
     },
   });
   socket.on('yt:state', (s) => (ytState = s));
+  const linkSource = sourcePicker([...document.querySelectorAll('.src-toggle button')], $('ytUrl'));
 
   $('mediaFile').addEventListener('change', async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -1424,7 +1441,8 @@
     e.preventDefault();
     const url = $('ytUrl').value.trim();
     if (!url) return;
-    socket.timeout(5000).emit('yt:submit', url, (err, res) => {
+    yt.unlock();
+    socket.timeout(5000).emit('media:submit', { source: linkSource(), url }, (err, res) => {
       if (err || !res.ok) $('nowPlaying').textContent = err ? 'server timeout' : res.error;
       else $('ytUrl').value = '';
     });
@@ -1572,5 +1590,5 @@
   });
 
   // Expose for debugging in DevTools.
-  window.__pulse = { pulse, audio, view, fx, toggleFx, controls, ctl, setControl, renderFrame: (t) => renderFrame(t), setMode, get modes() { return modes; }, get programs() { return programs; }, gl, get ytState() { return ytState; } };
+  window.__pulse = { pulse, audio, view, fx, toggleFx, controls, ctl, setControl, media: yt, renderFrame: (t) => renderFrame(t), setMode, get modes() { return modes; }, get programs() { return programs; }, gl, get ytState() { return ytState; } };
 })();

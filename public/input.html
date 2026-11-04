@@ -52,8 +52,12 @@
     </section>
 
     <section class="card video">
+      <div class="src-toggle" role="group" aria-label="Link type">
+        <button type="button" data-source="youtube">▶ YouTube</button>
+        <button type="button" data-source="spotify">● Spotify</button>
+      </div>
       <form id="ytForm" class="yt-form" autocomplete="off">
-        <input id="ytUrl" type="url" inputmode="url" placeholder="Paste a YouTube link" aria-label="YouTube URL" required>
+        <input id="ytUrl" type="text" inputmode="url" placeholder="Paste a YouTube link" aria-label="Song or video link" required>
         <button class="btn" type="submit">Play</button>
       </form>
       <div class="upload-row">
@@ -66,9 +70,10 @@
       <div class="player-wrap">
         <div id="player"></div>
         <video id="filePlayer" class="file-player" playsinline hidden></video>
+        <div id="spotifyWrap" class="spotify-wrap" hidden></div>
         <div id="audioOnly" class="player-empty audio-only" hidden>♪ <span id="audioTitle"></span></div>
         <!-- Shield blocks taps so the local player can't be paused or scrubbed out of sync. -->
-        <div class="player-shield"></div>
+        <div id="shield" class="player-shield"></div>
         <button id="tapSync" class="btn primary tap-sync" type="button" hidden>Tap to sync video</button>
         <div id="ytEmpty" class="player-empty">Nothing playing yet</div>
       </div>

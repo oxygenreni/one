@@ -68,12 +68,30 @@
     return apiPromise;
   }
 
+  let spotifyApiPromise = null;
+  function loadSpotifyApi() {
+    if (spotifyApiPromise) return spotifyApiPromise;
+    spotifyApiPromise = new Promise((resolve) => {
+      root.onSpotifyIframeApiReady = (api) => resolve(api);
+      const s = document.createElement('script');
+      s.src = 'https://open.spotify.com/embed/iframe-api/v1';
+      s.async = true;
+      document.head.appendChild(s);
+    });
+    return spotifyApiPromise;
+  }
+
+  // Spotify only reports its position a few times a second and seeks coarsely, so allow more drift.
+  const SPOTIFY_DRIFT_SEEK = 0.8;
+  const SPOTIFY_SEEK_COOLDOWN_MS = 2500;
 
   /**
-   * Keeps the shared media locked to server state. The server's `media` is either a YouTube
-   * video (played in an embedded YouTube player) or an uploaded file (played in a native
-   * <video> element, which also allows same-origin Web Audio analysis).
-   * Options: { muted, mediaElement, onStatus(statusObj), onBlocked(bool) }
+   * Keeps the shared media locked to server state. The server's `media` is a YouTube video
+   * (embedded YouTube player), a Spotify track (embedded Spotify player) or an uploaded file
+   * (native <video> element, which also allows same-origin Web Audio analysis).
+   * Options: { muted, mediaElement, spotifyElement, shield, reportSpotifyDuration,
+   *            onStatus(statusObj), onBlocked(bool) }
+   * The Spotify embed has no volume control, so a muted page never loads it.
    */
   class MediaSync {
     constructor(elementId, socket, timeSync, options = {}) {
@@ -96,6 +114,9 @@
       this.blocked = false;
       this.drift = 0;
       this.errorFor = null;
+      this.sp = null; // { ctl, ready, uri, state, lastPlay, lastSeek, error } once a Spotify track is loaded
+      this.spWrap = options.spotifyElement || null;
+      if (this.spWrap) this.spWrap.hidden = true;
 
       if (this.el) {
         this.el.playsInline = true;
@@ -174,7 +195,8 @@
         kind: media.kind,
         id: media.id,
         url: media.url,
-        title: media.kind === 'file' ? media.title : media.id,
+        uri: media.uri,
+        title: media.kind === 'youtube' ? media.id : media.title,
         mime: media.mime,
         videoId: media.kind === 'youtube' ? media.id : null,
         playing,
@@ -182,7 +204,7 @@
       };
     }
 
-    /** 'youtube' | 'file' | null */
+    /** 'youtube' | 'spotify' | 'file' | null */
     get kind() {
       const exp = this.expected();
       return exp ? exp.kind : null;
@@ -193,6 +215,7 @@
       if (!exp) {
         this._pauseYouTube();
         this._pauseFile();
+        this._pauseSpotify();
         this._showSurface(null);
         this._setBlocked(false);
         this._status({ kind: null, videoId: null });
@@ -200,10 +223,17 @@
       }
       if (exp.kind === 'file') {
         this._pauseYouTube();
+        this._pauseSpotify();
         this._showSurface('file');
         this._enforceFile(exp);
+      } else if (exp.kind === 'spotify') {
+        this._pauseYouTube();
+        this._pauseFile();
+        this._showSurface(this.muted ? null : 'spotify');
+        this._enforceSpotify(exp);
       } else {
         this._pauseFile();
+        this._pauseSpotify();
         this._showSurface('youtube');
         this._enforceYouTube(exp);
       }
@@ -211,8 +241,132 @@
 
     _showSurface(kind) {
       if (this.el) this.el.hidden = kind !== 'file';
+      if (this.spWrap) this.spWrap.hidden = kind !== 'spotify';
       const iframe = this.ready && this.player.getIframe ? this.player.getIframe() : null;
       if (iframe) iframe.style.visibility = kind === 'youtube' ? 'visible' : 'hidden';
+      // If Spotify won't start on its own, its own play button must be tappable.
+      if (this.opts.shield) this.opts.shield.style.pointerEvents = kind === 'spotify' && this.blocked ? 'none' : '';
+    }
+
+    _pauseSpotify() {
+      const sp = this.sp;
+      if (sp && sp.ready && sp.state && !sp.state.isPaused) sp.ctl.pause();
+    }
+
+    /** Creates the Spotify embed on first use; later tracks reuse it via loadUri. */
+    _initSpotify(exp) {
+      if (this.sp || !this.spWrap) return;
+      const sp = { ctl: null, ready: false, uri: exp.uri, state: null, lastPlay: 0, lastSeek: 0, error: null };
+      this.sp = sp;
+      const host = document.createElement('div');
+      this.spWrap.appendChild(host);
+      loadSpotifyApi().then((api) => {
+        const startAt = Math.floor(this.expected() ? this.expected().position : 0);
+        api.createController(host, { uri: exp.uri, width: '100%', height: '100%', theme: 'dark', startAt }, (ctl) => {
+          sp.ctl = ctl;
+          ctl.addListener('ready', () => {
+            sp.ready = true;
+            this.enforce();
+          });
+          ctl.addListener('playback_update', (e) => {
+            const d = (e && e.data) || e || {};
+            sp.ready = true;
+            sp.state = {
+              isPaused: !!d.isPaused,
+              isBuffering: !!d.isBuffering,
+              position: (d.position || 0) / 1000,
+              duration: (d.duration || 0) / 1000,
+              at: performance.now(),
+            };
+          });
+          ctl.addListener('error', () => {
+            sp.error = sp.uri;
+            this.enforce();
+          });
+        });
+      });
+    }
+
+    _enforceSpotify(exp) {
+      if (this.muted) {
+        // No volume control on the embed: a muted page leaves Spotify to the display.
+        this._pauseSpotify();
+        this._setBlocked(false);
+        this.drift = 0;
+        this._status({ ...exp, note: 'Spotify is playing on the display. Turn sound on to listen here too.' });
+        return;
+      }
+      if (!this.spWrap) {
+        this._status({ ...exp, error: 'This page cannot play Spotify.' });
+        return;
+      }
+      this._initSpotify(exp);
+      const sp = this.sp;
+      if (!sp.ready) {
+        this._status({ ...exp, note: 'Loading Spotify…' });
+        return;
+      }
+      const nowMs = performance.now();
+      if (sp.uri !== exp.uri) {
+        sp.uri = exp.uri;
+        sp.state = null;
+        sp.error = null;
+        sp.lastSeek = nowMs;
+        sp.ctl.loadUri(exp.uri, false, Math.floor(exp.position));
+        return;
+      }
+      if (sp.error === exp.uri) {
+        this._setBlocked(false);
+        this._status({ ...exp, error: 'Spotify can\'t play this track here.' });
+        return;
+      }
+      const st = sp.state;
+      // Spotify plays 30 s previews when not logged in, so only trusted pages report the length.
+      if (this.opts.reportSpotifyDuration && st && st.duration > 31) this._reportDuration(exp.id, st.duration);
+      const cur = st ? st.position + (st.isPaused || st.isBuffering ? 0 : (nowMs - st.at) / 1000) : 0;
+
+      // Past the end of what Spotify lets this browser play (a 30 s preview when logged out):
+      // stay quiet instead of restarting the preview over and over.
+      if (exp.playing && st && st.duration > 0 && exp.position >= st.duration - 0.5) {
+        if (!st.isPaused) sp.ctl.pause();
+        this._setBlocked(false);
+        this.drift = 0;
+        this._status({
+          ...exp,
+          note: st.duration <= 31 ? 'Spotify preview ended. Log in to Spotify in this browser for full songs.' : undefined,
+        });
+        return;
+      }
+
+      if (exp.playing) {
+        if (!st || st.isPaused) {
+          if (nowMs - sp.lastPlay > 1500) {
+            sp.lastPlay = nowMs;
+            if (st && Math.abs(cur - exp.position) > 1) sp.ctl.seek(exp.position);
+            if (st && st.position > 0) sp.ctl.resume();
+            else sp.ctl.play();
+            if (!this.blockedSince) this.blockedSince = nowMs;
+          }
+        } else {
+          this.blockedSince = 0;
+        }
+        this._setBlocked(this.blockedSince > 0 && nowMs - this.blockedSince > 3000);
+        this.drift = st && !st.isPaused ? cur - exp.position : 0;
+        if (st && !st.isPaused && !st.isBuffering && Math.abs(this.drift) > SPOTIFY_DRIFT_SEEK && nowMs - sp.lastSeek > SPOTIFY_SEEK_COOLDOWN_MS) {
+          sp.lastSeek = nowMs;
+          sp.ctl.seek(exp.position + 0.25);
+        }
+      } else {
+        this.blockedSince = 0;
+        this._setBlocked(false);
+        if (st && !st.isPaused) sp.ctl.pause();
+        if (st && Math.abs(cur - exp.position) > 1 && nowMs - sp.lastSeek > SPOTIFY_SEEK_COOLDOWN_MS) {
+          sp.lastSeek = nowMs;
+          sp.ctl.seek(exp.position);
+        }
+        this.drift = 0;
+      }
+      this._status({ ...exp, drift: this.drift });
     }
 
     _pauseYouTube() {
@@ -352,6 +506,7 @@
         if (!this.muted) this.player.unMute();
         if (exp && exp.kind === 'youtube' && exp.playing) this.player.playVideo();
       }
+      if (this.sp && this.sp.ready && !this.muted && exp && exp.kind === 'spotify' && exp.playing) this.sp.ctl.resume();
       this.blockedSince = 0;
       this._setBlocked(false);
       this.enforce();
@@ -360,14 +515,19 @@
     setMuted(m) {
       this.muted = m;
       if (this.el) this.el.muted = m;
-      if (!this.ready) return;
-      if (m) this.player.mute();
-      else this.player.unMute();
+      if (m) this._pauseSpotify();
+      if (this.ready) {
+        if (m) this.player.mute();
+        else this.player.unMute();
+      }
+      this.enforce();
     }
 
     _setBlocked(b) {
       if (b === this.blocked) return;
       this.blocked = b;
+      const exp = this.expected();
+      if (exp && exp.kind === 'spotify') this._showSurface(this.muted ? null : 'spotify');
       if (this.opts.onBlocked) this.opts.onBlocked(b);
     }
 
@@ -450,8 +610,45 @@
     outdated: 'The server is running old code. Restart it (npm run tunnel) to get the latest features.',
   };
 
+  /**
+   * YouTube / Spotify switch for a link form. `buttons` are elements with data-source; the
+   * choice is remembered per browser. Returns a getter for the current source.
+   */
+  function sourcePicker(buttons, input, onChange) {
+    const PLACEHOLDER = { youtube: 'Paste a YouTube link', spotify: 'Paste a Spotify song link' };
+    let source = 'youtube';
+    try { if (localStorage.getItem('pulse.source') === 'spotify') source = 'spotify'; } catch (_) { /* ignore */ }
+    const apply = () => {
+      buttons.forEach((b) => {
+        b.classList.toggle('active', b.dataset.source === source);
+        b.setAttribute('aria-pressed', String(b.dataset.source === source));
+      });
+      input.placeholder = PLACEHOLDER[source];
+      if (onChange) onChange(source);
+    };
+    buttons.forEach((b) =>
+      b.addEventListener('click', () => {
+        source = b.dataset.source;
+        try { localStorage.setItem('pulse.source', source); } catch (_) { /* ignore */ }
+        apply();
+      })
+    );
+    // Pasting an obvious link of the other kind switches for you.
+    input.addEventListener('input', () => {
+      const v = input.value;
+      const guess = /spotify\.com|^spotify:/i.test(v) ? 'spotify' : /youtu\.?be/i.test(v) ? 'youtube' : null;
+      if (guess && guess !== source) {
+        source = guess;
+        apply();
+      }
+    });
+    apply();
+    return () => source;
+  }
+
   root.TimeSync = TimeSync;
   root.MediaSync = MediaSync;
+  root.sourcePicker = sourcePicker;
   root.uploadMedia = uploadMedia;
   root.watchServerBuild = watchServerBuild;
   root.showBanner = showBanner;
