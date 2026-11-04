@@ -14,21 +14,8 @@
     <div class="start-card">
       <h1>Pulse</h1>
       <p>A room full of heartbeats, rendered live.</p>
-      <label class="field">Audio analysis source
-        <select id="startAudioSrc">
-          <option value="tab">This tab's audio (shows a coloured outline)</option>
-          <option value="screen">Entire screen + system audio (no outline)</option>
-          <option value="cable">Virtual cable (VB-Audio, exact PC audio, no prompt)</option>
-          <option value="mic">Input device (Stereo Mix / mic / line-in, no prompt)</option>
-          <option value="off">None (pulse only)</option>
-        </select>
-      </label>
-      <label class="field" id="startAudioDeviceField">Input device
-        <select id="startAudioDevice"><option value="">Default input</option></select>
-      </label>
       <button id="startBtn" class="btn primary" type="button">Start display</button>
-      <p class="hint"><b>Uploaded files</b> (⬆ File, or from a phone) are analysed directly, so no source is needed for them.</p>
-      <p class="hint" id="sourceHint"></p>
+      <p class="hint">The visuals listen to the computer's <b>system audio</b>. When Chrome asks, choose <b>Entire screen</b>, tick <b>Also share system audio</b>, then click <b>Hide</b> on the sharing bar. Uploaded files are heard directly either way.</p>
       <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page" width="180" height="180">
       <p class="hint">Phones scan to join, or open <span id="joinUrl" class="mono">…/input.html</span></p>
       <p id="fatal" class="fatal" hidden></p>
@@ -53,18 +40,10 @@
 
     <div class="hud hud-right">
       <canvas id="spectrum" width="128" height="22" title="Live FFT"></canvas>
-      <select id="audioSrc" aria-label="Audio source">
-        <option value="tab">Tab audio</option>
-        <option value="screen">System audio</option>
-        <option value="cable">Virtual cable</option>
-        <option value="mic">Input device</option>
-        <option value="off">Off</option>
-      </select>
-      <select id="audioDevice" aria-label="Audio input device" hidden><option value="">Default input</option></select>
-      <button id="audioBtn" class="btn small" type="button">Connect</button>
+      <button id="audioBtn" class="btn small" type="button" title="Listen to what the computer plays: choose Entire screen and tick Also share system audio">🔊 System audio</button>
       <span id="audioStatus" class="muted">audio off</span>
       <span id="fileAudioBadge" class="badge" title="The uploaded file is analysed directly — no capture needed" hidden>♪ file audio · direct</span>
-      <span id="spotifyHint" class="badge warn" title="Spotify's audio can't be read by the page. Capture what the PC plays instead: Virtual cable or Stereo Mix (Input device) work best." hidden>Spotify: pick Virtual cable or Stereo Mix for the visuals</span>
+      <span id="spotifyHint" class="badge warn" title="Spotify's audio can't be read by the page directly. Share system audio so the visuals can hear it." hidden>Spotify: click 🔊 System audio for the visuals</span>
     </div>
 
     <nav id="fxBar" class="modes fx-bar" aria-label="Effect layers"></nav>

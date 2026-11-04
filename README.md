@@ -6,7 +6,7 @@ Phones measure their users' heartbeats with the camera. A YouTube track plays in
  phones (input.html)                server (Node/Express/Socket.io)            display (output.html)
  camera → PPG → BPM ──pulse 10Hz──▶ latest-sample-per-phone aggregator ──15Hz──▶ pulse uniforms ─┐
  YouTube URL ────────yt:submit────▶ authoritative playback clock ──yt:state──▶ YouTube player   │
- YouTube player ◀───yt:state 2s────┘   (+ time:ping clock sync)                  │ tab audio    ▼
+ YouTube player ◀───yt:state 2s────┘   (+ time:ping clock sync)                  │ system audio ▼
                                                                                  └─▶ Web Audio FFT → WebGL
 ```
 
@@ -23,8 +23,8 @@ npm run start:https    # https://<LAN-IP>:8443 with a self-signed certificate
 
 Chrome on Android often fails on self-signed certificates with `ERR_TOO_MANY_RETRIES` (Chromium issue 40418163). Use the tunnel for parties rather than `start:https`. With `start:https`, the server generates a self-signed certificate in `.cert/` the first time it runs, and each phone has to accept the browser warning once. You can supply your own certificate with `SSL_KEY=… SSL_CERT=…`. Set `PORT` to change the port.
 
-1. Open `/output.html` on the computer that drives the projector or speakers. Click **Start display**. When Chrome asks what to share, choose **this tab** and turn on **Share tab audio**.
-2. Phones scan the QR code on the main page (`/`) or the display's start screen, or open `/input.html` directly. They tap **Start pulse sensor** and cover the rear camera and flash with a fingertip.
+1. Open `/output.html` on the computer that drives the projector or speakers. Click **Start display**. When Chrome asks what to share, choose **Entire screen** and tick **Also share system audio**, then click **Hide** on the sharing bar. If you skip it, click **🔊 System audio** in the top-right later.
+2. Phones scan the QR code on the main page (`/`) or the display's start screen, or open `/input.html` directly. They pick how to join: **Tap** along to the music, **Dance** with the phone, or the experimental **Heart camera**.
 3. Anyone can paste a YouTube or Spotify link (see [Spotify](#spotify)), or **upload an audio or video file** (up to 100 MB). Every player loads it and follows the server clock. Uploads are kept in `uploads/`; only the 20 newest are kept.
 
 To try it without phones, run `npm run simulate -- http://localhost:3000 25`. This starts 25 fake heartbeats. `npm test` runs the unit tests and a socket test with 30 clients.
@@ -100,7 +100,7 @@ Both link boxes (phone and display) have a **YouTube / Spotify** switch. Pasting
 
 - **Log in to Spotify in the display's browser.** The embedded player plays full songs only for a logged-in browser, otherwise 30-second previews. When a preview runs out, the display says so and stays quiet instead of looping.
 - **Phones don't play Spotify while muted.** The embed has no volume control, so a muted phone shows the title and leaves the sound to the display. Turning sound on loads the player on that phone. It needs a Spotify login for full songs too.
-- **Sound for the visuals:** Spotify's audio is copy-protected and comes from another site, so the page can't analyse it directly. Use **Virtual cable** or **Input device → Stereo Mix** on the display. Tab audio may work but isn't guaranteed. If a Spotify song is playing and the display hears nothing for 4 s, a yellow hint appears next to the spectrum.
+- **Sound for the visuals:** Spotify's audio is copy-protected and comes from another site, so the page can't analyse it directly. Sharing **system audio** hears it like everything else the computer plays. If a Spotify song is playing and the display hears nothing for 4 s, a yellow hint appears next to the spectrum.
 - Sync is looser than YouTube's: Spotify reports its position less often and seeks coarsely, so it corrects only when it drifts more than 0.8 s.
 - Only displays report a Spotify song's length to the server, and only if it's longer than a preview, so a logged-out phone can't cut the song short for everyone.
 
@@ -159,19 +159,11 @@ A local oscillator runs at the room's BPM, and real beats from phones nudge its 
 | Bloom | beats flash the glow | louder music lowers the threshold and raises the glow |
 | Heart Ripple | every heartbeat sends out a shockwave ring | — |
 
-### Why the display needs an audio source
+### Why the display needs system audio
 
-The YouTube player is a cross-origin iframe, so the Web Audio API cannot read its audio directly. The display offers these sources. Each one feeds only an `AnalyserNode` and is not played a second time:
+The YouTube and Spotify players are cross-origin iframes, so the Web Audio API cannot read their audio directly. The display therefore listens to the computer's **system audio**: `getDisplayMedia` with "Entire screen" and "Also share system audio" (Chrome or Edge on Windows and ChromeOS). Only the audio is used; the screen video is requested at the lowest size and switched off. A whole-screen share has no coloured tab outline; click **Hide** on Chrome's "sharing your screen" bar. The captured audio only feeds an `AnalyserNode` and is never played a second time.
 
-| Source | How | Trade-off |
-| --- | --- | --- |
-| **Uploaded file** | Automatic. Uploaded audio or video is served from this server, so the display analyses it directly with `createMediaElementSource`. | None: no prompt, no indicator, exact audio. Overrides the source below while a file is playing. |
-| **Tab audio** | `getDisplayMedia` captures this tab. Choose the tab and enable "Share tab audio". | Chrome draws a coloured outline around the shared tab. A page cannot remove it. |
-| **System audio** | Choose "Entire screen" and tick "Also share system audio" (Windows and ChromeOS). | No tab outline. Click **Hide** on Chrome's "sharing your screen" bar. |
-| **Virtual cable** | The display finds a VB-Audio, VoiceMeeter or BlackHole recording device automatically. | Exact PC audio with no prompt and no indicator. Needs a one-time install (see below). |
-| **Input device** | Uses `getUserMedia` with a device you choose. | No prompt after the first time. With **Stereo Mix** it hears exactly what the PC plays. A microphone hears the room's speakers instead. |
-
-To get Stereo Mix on Windows, open **Sound settings → More sound settings → Recording**. Right-click the list and choose **Show Disabled Devices**, then enable **Stereo Mix**. If your sound driver doesn't offer it, install the free [VB-Audio Virtual Cable](https://vb-audio.com/Cable/). Set **CABLE Input** as Chrome's or Windows' audio output, and in **CABLE Output → Properties → Listen**, tick "Listen to this device" so you still hear it. The display automatically selects loopback devices and remembers your source and device.
+**Uploaded files** don't need it: they're served from this server, so the display analyses them directly with `createMediaElementSource` while they play.
 
 ## Notes
 

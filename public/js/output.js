@@ -5,6 +5,9 @@
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   const lerpK = (dt, tau) => 1 - Math.exp(-dt / tau);
   const TAU = Math.PI * 2;
+  const smooth01 = (x) => x * x * (3 - 2 * x); // smoothstep on 0..1
+  const BEAT_ATTACK_S = 0.07;                   // how fast the beat swells into each kick
+  const WAVE_RISE_S = 0.09;                     // how long the beat waveform takes to swell
 
   // ======================================================================== networking
   const socket = io({ transports: ['websocket', 'polling'] });
@@ -123,6 +126,7 @@
     lastRealBeat: 0,
     wave: 0,
     breath: 0,
+    phaseNudge: 0,   // beat-clock correction still to apply (spread over frames)
     motion: 0,       // smoothed movement energy of dancing phones
     targetMotion: 0,
     source: 'tempo', // what sets the rhythm: 'phones', 'music' or 'tempo'
@@ -147,8 +151,9 @@
       pulse.kick = Math.min(1.5, pulse.kick + (0.8 * a.beats) / n);
       pulse.lastRealBeat = performance.now();
       // Pull the oscillator toward observed beats; with many hearts the nudges average out.
-      const frac = pulse.phase - Math.round(pulse.phase);
-      pulse.phase -= (frac * 0.35) / n;
+      const at = pulse.phase + pulse.phaseNudge; // where the clock is headed, counting corrections in flight
+      const frac = at - Math.round(at);
+      pulse.phaseNudge -= (frac * 0.35) / n;
     }
   });
 
@@ -325,6 +330,10 @@
 
     const prev = pulse.phase;
     pulse.phase += (dt * pulse.bpm) / 60;
+    // Phase corrections from phones' beats are spread over a fraction of a second, not jumped.
+    const nudge = pulse.phaseNudge * lerpK(dt, 0.25);
+    pulse.phase += nudge;
+    pulse.phaseNudge -= nudge;
     if (onMusic) {
       // Pull the beat clock onto the song's beats.
       const want = (nowMs / 1000) * (music.bpm / 60) - music.phase;
@@ -339,13 +348,18 @@
       pulse.kick = Math.max(pulse.kick, manual || onMusic || (real && sinceReal < 2500) ? 0.75 : real ? 0.6 : 0.35);
     }
     pulse.kick *= Math.exp(-dt * 3.5);
-    pulse.beat = pulse.kick * ctl.intensity;
+    // Every effect reads `beat`, so it is the one place beats are smoothed: it swells into each
+    // kick over ~60 ms instead of jumping in one frame, then fades with it.
+    const target = pulse.kick * ctl.intensity;
+    pulse.beat += (target - pulse.beat) * lerpK(dt, target > pulse.beat ? BEAT_ATTACK_S : 0.05);
 
-    // "Lub-dub" heartbeat shape.
+    // Beat waveform: a smooth swell and fade, then a softer second bump, back to ~0 before the next
+    // beat so nothing jumps when the phase wraps.
     const f = pulse.phase - Math.floor(pulse.phase);
-    const lub = Math.exp(-f * 9);
-    const dub = 0.6 * Math.exp(-Math.abs(f - 0.22) * 28);
-    pulse.wave = clamp((Math.max(lub, dub) * (0.45 + 0.55 * pulse.strength) + 0.4 * pulse.kick) * ctl.intensity, 0, 1);
+    const rise = Math.min(0.3, (WAVE_RISE_S * pulse.bpm) / 60); // the swell takes the same time at any tempo
+    const swell = f < rise ? smooth01(f / rise) : Math.exp(-(f - rise) * 6);
+    const echo = 0.5 * Math.exp(-(((f - 0.3) / 0.07) ** 2));
+    pulse.wave = clamp((Math.max(swell, echo) * (0.45 + 0.55 * pulse.strength) * ctl.intensity + 0.4 * pulse.beat), 0, 1);
     pulse.breath = Math.sin((pulse.phase / 4) * TAU) * ctl.breath;
 
     // Dancers heat the room up: the harder they move, the wilder every mode gets.
@@ -368,7 +382,8 @@
     mid: 0,
     treble: 0,
     level: 0,
-    onset: 0,
+    onset: 0,        // smoothed bass-hit envelope (what effects read)
+    onsetRaw: 0,     // the detector's own spike
     onsetEvents: 0,
     peak: 0.25,
     prevBass: 0,
@@ -376,8 +391,6 @@
     mode: 'off',
   };
 
-  // Virtual audio cables expose what the PC plays as a recording device.
-  const CABLE_RE = /cable output|vb-audio|virtual cable|voicemeeter out|blackhole|loopback audio/i;
 
   function ensureAudioContext() {
     if (!audio.ctx) {
@@ -412,62 +425,29 @@
     src.connect(audio.ctx.destination);
   }
 
-  async function findCableDevice() {
-    const list = async () => (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
-    let inputs = await list();
-    if (!inputs.some((d) => d.label)) {
-      // Device labels are hidden until a microphone permission has been granted once.
-      const tmp = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      tmp.getTracks().forEach((t) => t.stop());
-      inputs = await list();
-    }
-    return inputs.find((d) => CABLE_RE.test(d.label) && d.deviceId !== 'default' && d.deviceId !== 'communications') ||
-      inputs.find((d) => CABLE_RE.test(d.label));
-  }
-
-  async function connectAudio(kind) {
+  /**
+   * Captures the computer's system audio (whatever it plays: YouTube, Spotify, anything) for
+   * analysis. The players are cross-origin, so their audio can't be tapped directly. Chrome only
+   * offers system audio with a screen share, so the cheapest possible video is requested and
+   * switched off; a whole-screen share also avoids Chrome's coloured "shared tab" outline.
+   */
+  async function connectAudio() {
     disconnectAudio();
-    if (kind === 'off') {
-      setAudioStatus('audio off');
-      return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      throw new Error('This browser can\'t share system audio. Use Chrome or Edge.');
     }
     ensureAudioContext();
     await audio.ctx.resume();
     const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
-    let stream;
-    if (kind === 'tab' || kind === 'screen') {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-        throw new Error('Screen/tab capture not supported in this browser — use an input device.');
-      }
-      // The YouTube iframe is cross-origin, so its audio can't be tapped directly;
-      // capturing this tab's (or the whole system's) audio output gives Web Audio the synced soundtrack.
-      // Only audio is used, so request the cheapest possible video.
-      const video = { frameRate: { ideal: 1 }, width: { ideal: 320 }, height: { ideal: 180 } };
-      stream = await navigator.mediaDevices.getDisplayMedia(
-        kind === 'tab'
-          ? { video, audio: raw, preferCurrentTab: true, selfBrowserSurface: 'include', systemAudio: 'include' }
-          : // Whole-screen capture with system audio avoids Chrome's coloured "shared tab" outline.
-            { video: { ...video, displaySurface: 'monitor' }, audio: raw, systemAudio: 'include', selfBrowserSurface: 'exclude', monitorTypeSurfaces: 'include', surfaceSwitching: 'exclude' }
-      );
-      if (stream.getAudioTracks().length === 0) {
-        stream.getTracks().forEach((t) => t.stop());
-        throw new Error(kind === 'tab' ? 'No audio shared — tick “Share tab audio”.' : 'No audio shared — pick “Entire screen” and tick “Also share system audio”.');
-      }
-      stream.getVideoTracks().forEach((t) => (t.enabled = false));
-    } else if (kind === 'cable') {
-      const cable = await findCableDevice();
-      if (!cable) {
-        throw new Error('No virtual cable found — install VB-Audio Cable (vb-audio.com/Cable), then reload.');
-      }
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { ...raw, deviceId: { exact: cable.deviceId } }, video: false });
-    } else {
-      const deviceId = $('audioDevice').value;
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { ...raw, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) },
-        video: false,
-      });
-      refreshAudioDevices();
+    const video = { frameRate: { ideal: 1 }, width: { ideal: 320 }, height: { ideal: 180 }, displaySurface: 'monitor' };
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video, audio: raw, systemAudio: 'include', selfBrowserSurface: 'exclude', monitorTypeSurfaces: 'include', surfaceSwitching: 'exclude',
+    });
+    if (stream.getAudioTracks().length === 0) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new Error('No audio shared: pick “Entire screen” and tick “Also share system audio”.');
     }
+    stream.getVideoTracks().forEach((t) => (t.enabled = false));
     const analyser = makeAnalyser();
     const source = audio.ctx.createMediaStreamSource(stream);
     // Analyse only; never route to the speakers (the YouTube player already plays it).
@@ -476,22 +456,12 @@
     audio.stream = stream;
     audio.source = source;
     audio.analyser = analyser;
-    audio.mode = kind;
+    audio.mode = 'system';
     stream.getAudioTracks()[0].addEventListener('ended', () => {
       disconnectAudio();
-      setAudioStatus('audio capture ended');
+      setAudioStatus('audio sharing stopped');
     });
-    const label = stream.getAudioTracks()[0].label;
-    setAudioStatus(
-      kind === 'tab'
-        ? 'tab audio ✓'
-        : kind === 'screen'
-          ? 'system audio ✓'
-          : kind === 'cable'
-            ? `virtual cable ✓${label ? ` (${label.slice(0, 24)})` : ''}`
-            : `input ✓${label ? ` (${label.slice(0, 28)})` : ''}`
-    );
-    try { localStorage.setItem('pulse.audioSrc', kind); } catch (_) { /* ignore */ }
+    setAudioStatus('system audio ✓');
   }
 
   function disconnectAudio() {
@@ -568,11 +538,13 @@
     const rawBass = clamp(bass * g, 0, 1);
     const flux = rawBass - audio.prevBass;
     audio.prevBass = rawBass;
-    if (flux > 0.18 && audio.onset < 0.5) {
-      audio.onset = 1;
+    if (flux > 0.18 && audio.onsetRaw < 0.5) {
+      audio.onsetRaw = 1;
       audio.onsetEvents++;
     }
-    audio.onset *= Math.exp(-dt * 6);
+    audio.onsetRaw *= Math.exp(-dt * 6);
+    // What effects see: swells into each hit instead of jumping, like the beat.
+    audio.onset += (audio.onsetRaw - audio.onset) * lerpK(dt, audio.onsetRaw > audio.onset ? 0.04 : 0.05);
   }
 
   function setAudioStatus(t) {
@@ -793,7 +765,7 @@
       t: 0,
       shift: [0, 0, 0],
       update(dt) {
-        this.t += dt * (0.25 + 0.6 * pulse.energy + 0.9 * pulse.beat);
+        this.t += dt * (0.25 + 0.6 * pulse.energy + 0.5 * pulse.beat);
         this.shift[0] += dt * (0.01 + 0.18 * audio.bass);
         this.shift[1] += dt * (0.008 + 0.14 * audio.mid);
         this.shift[2] += dt * (0.006 + 0.14 * audio.treble);
@@ -864,6 +836,7 @@
       },
     };
 
+    const SHOVE_S = 0.1; // how long each beat's push into the fluid lasts
     /** Stable-fluids simulation; `makeFluid` lets several modes own independent fluid states. */
     const makeFluid = (id, label) => ({
       id,
@@ -877,6 +850,7 @@
       aspect: 0,
       lastBeat: 0,
       lastOnset: 0,
+      shove: 0, // beat push still to deliver
       spin: 0,
       hue: Math.random(),
       ensure() {
@@ -912,23 +886,33 @@
         }, v.write);
         v.swap();
 
-        // Pulse = physical force: each beat shoves the fluid from rotating emitters.
+        // Pulse = physical force: each beat pushes the fluid from rotating emitters. The push is
+        // spread over ~0.1 s (`shove` decays) rather than landing in one frame, so it surges, not jolts.
         this.spin += dt * (0.15 + 0.4 * pulse.energy);
         const beats = pulse.beatEvents - this.lastBeat;
         this.lastBeat = pulse.beatEvents;
+        const k = 3 + Math.min(pulse.active, 4);
+        const emitter = (i) => {
+          const a = this.spin + (i / k) * TAU;
+          const r = 0.22 + 0.06 * Math.sin(this.spin * 3 + i);
+          return { a, x: 0.5 + (Math.cos(a) * r) / this.aspect, y: 0.5 + Math.sin(a) * r };
+        };
         if (beats > 0) {
-          const k = 3 + Math.min(pulse.active, 4);
-          const force = 260 + 520 * pulse.energy + 260 * pulse.strength;
+          this.shove = Math.min(1.5, this.shove + 1);
           for (let i = 0; i < k; i++) {
-            const a = this.spin + (i / k) * TAU;
-            const r = 0.22 + 0.06 * Math.sin(this.spin * 3 + i);
-            const x = 0.5 + (Math.cos(a) * r) / this.aspect;
-            const y = 0.5 + Math.sin(a) * r;
+            // A faint dye trail marks every beat even in silence.
+            const { x, y } = emitter(i);
+            this.splat(this.dye, x, y, hsv((this.hue + i / k) % 1, 0.8, 0.12 + 0.1 * pulse.strength), 0.0025);
+          }
+        }
+        if (this.shove > 0.02) {
+          const share = this.shove * lerpK(dt, SHOVE_S); // this frame's part of the push
+          this.shove -= share;
+          const force = (220 + 440 * pulse.energy + 220 * pulse.strength) * share; // the shares add up to one push per beat
+          for (let i = 0; i < k; i++) {
+            const { a, x, y } = emitter(i);
             const dir = a + Math.PI / 2 + 0.6;
             this.splat(v, x, y, [Math.cos(dir) * force, Math.sin(dir) * force, 0], 0.0035);
-            // A faint dye trail marks every heartbeat even in silence.
-            const c = hsv((this.hue + i / k) % 1, 0.8, 0.12 + 0.1 * pulse.strength);
-            this.splat(this.dye, x, y, c, 0.0025);
           }
         }
         // Breathing lung at the centre: radial in/out push.
@@ -952,7 +936,7 @@
           const y = 0.15 + Math.random() * 0.7;
           this.splat(this.dye, x, y, hsv(h, 0.9, amt), 0.002 + 0.004 * audio.bass);
           const a = Math.random() * TAU;
-          const f = 150 + 350 * audio.bass;
+          const f = 100 + 230 * audio.bass;
           this.splat(v, x, y, [Math.cos(a) * f, Math.sin(a) * f, 0], 0.003);
         }
         if (this.inject) this.inject(dt);
@@ -985,14 +969,14 @@
 
     // Shared Julia parameter motion: pulse drives the c constant, audio the hue.
     const stepJulia = (j, dt) => {
-      j.angle += dt * (0.03 + 0.12 * pulse.energy + 0.25 * pulse.beat);
+      j.angle += dt * (0.03 + 0.12 * pulse.energy + 0.15 * pulse.beat);
       j.rot += dt * 0.03;
       j.hue += dt * (0.02 + 0.15 * audio.mid);
     };
     const juliaUniforms = (j) => {
       const s = 0.35 + 0.65 * pulse.strength;
       const a = j.angle + 0.16 * pulse.breath * s + 0.05 * pulse.wave;
-      const r = 0.7885 - 0.025 * pulse.beat + 0.008 * pulse.breath * s;
+      const r = 0.7885 - 0.015 * pulse.beat + 0.008 * pulse.breath * s;
       return { uJuliaC: [r * Math.cos(a), r * Math.sin(a)], uJuliaRot: j.rot, uHue: j.hue };
     };
 
@@ -1084,7 +1068,7 @@
       bands: 0,
       update(dt) {
         // Pulse = zoom velocity; each heartbeat surges the dive forward.
-        const vel = 0.07 + 0.32 * pulse.energy * (0.4 + 0.6 * pulse.strength) + 0.7 * pulse.beat;
+        const vel = 0.07 + 0.32 * pulse.energy * (0.4 + 0.6 * pulse.strength) + 0.35 * pulse.beat;
         this.logZoom += dt * vel;
         if (this.logZoom >= LOOP_AT + misOrbit.lnRho) {
           this.logZoom -= misOrbit.lnRho;
@@ -1365,7 +1349,7 @@
         ...U,
         uSrc: src.tex,
         uKaleido: fx.kaleido ? 1 : 0,
-        uSegments: 6 + 2 * Math.floor(pulse.energy * 2.99), // 6, 8 or 10 slices as the room heats up
+        uSegments: 6 + 2 * Math.round(controls.chaos * 2), // 6, 8 or 10 slices; changes only when Chaos is moved
         uKRot: fxState.kRot + 0.25 * pulse.breath,
         uKZoom: 1.0 - 0.12 * pulse.breath * (0.4 + 0.6 * pulse.strength),
         uRipple: fx.ripple ? 1 : 0,
@@ -1722,100 +1706,16 @@
   });
 
   // ---- audio source controls
-  // Static, trusted strings only (rendered as HTML for emphasis).
-  const SOURCE_HINTS = {
-    tab: 'Choose <b>this tab</b> and enable “Share tab audio”. Chrome outlines the shared tab.',
-    screen: 'Choose <b>Entire screen</b>, tick “Also share system audio”, then click <b>Hide</b> on Chrome\'s sharing bar.',
-    cable: 'Install <b>VB-Audio Cable</b> (vb-audio.com/Cable). In Windows Sound settings set <b>CABLE Input</b> as the output for Chrome (or the default), then on <b>CABLE Output → Properties → Listen</b> tick “Listen to this device” and pick your speakers.',
-    mic: 'Pick <b>Stereo Mix</b> (if enabled) to hear exactly what the PC plays, or a microphone to hear the room.',
-    off: 'Visuals follow the heartbeats only (uploaded files are still analysed).',
-  };
-  // Loopback inputs hear exactly what the PC plays — no share prompt and no capture outline.
-  const LOOPBACK_RE = /stereo mix|cable output|loopback|what u hear|wave out|monitor of/i;
-
-  async function refreshAudioDevices() {
-    const sel = $('audioDevice');
-    let saved = null;
-    try { saved = localStorage.getItem('pulse.audioDevice'); } catch (_) { /* ignore */ }
-    let inputs = [];
-    try {
-      inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
-    } catch (_) {
-      return;
-    }
-    const current = saved !== null ? saved : null;
-    const fill = (s) => {
-      s.textContent = '';
-      const def = document.createElement('option');
-      def.value = '';
-      def.textContent = 'Default input';
-      s.appendChild(def);
-      for (const d of inputs) {
-        if (!d.deviceId || d.deviceId === 'default' || d.deviceId === 'communications') continue;
-        const o = document.createElement('option');
-        o.value = d.deviceId;
-        const name = d.label || `Input ${s.length}`;
-        o.textContent = LOOPBACK_RE.test(name) ? `${name} — PC audio, no prompt` : name;
-        s.appendChild(o);
-      }
-    };
-    fill(sel);
-    fill($('startAudioDevice'));
-    const values = [...sel.options].map((o) => o.value);
-    if (current !== null && values.includes(current)) sel.value = current;
-    else {
-      const loop = inputs.find((d) => LOOPBACK_RE.test(d.label));
-      sel.value = loop && values.includes(loop.deviceId) ? loop.deviceId : '';
-    }
-    $('startAudioDevice').value = sel.value;
-  }
-
-  function syncAudioUi() {
-    $('audioDevice').hidden = $('audioSrc').value !== 'mic';
-    $('startAudioDeviceField').hidden = $('startAudioSrc').value !== 'mic';
-    $('sourceHint').innerHTML = SOURCE_HINTS[$('startAudioSrc').value] || '';
-  }
-
-  async function tryConnectAudio(kind) {
-    $('audioSrc').value = kind;
-    syncAudioUi();
+  async function tryConnectAudio() {
     setAudioStatus('connecting…');
     try {
-      await connectAudio(kind);
+      await connectAudio();
     } catch (err) {
       disconnectAudio();
-      setAudioStatus(err && err.name === 'NotAllowedError' ? 'audio permission denied' : (err.message || 'audio failed'));
+      setAudioStatus(err && err.name === 'NotAllowedError' ? 'no audio: click 🔊 System audio to share it' : (err.message || 'audio failed'));
     }
   }
-  $('audioBtn').addEventListener('click', () => tryConnectAudio($('audioSrc').value));
-  $('audioSrc').addEventListener('change', syncAudioUi);
-  $('startAudioSrc').addEventListener('change', syncAudioUi);
-  const onDeviceChange = (src) => () => {
-    $('audioDevice').value = src.value;
-    $('startAudioDevice').value = src.value;
-    try { localStorage.setItem('pulse.audioDevice', src.value); } catch (_) { /* ignore */ }
-  };
-  $('startAudioDevice').addEventListener('change', onDeviceChange($('startAudioDevice')));
-  $('audioDevice').addEventListener('change', () => {
-    onDeviceChange($('audioDevice'))();
-    if ($('audioSrc').value === 'mic') tryConnectAudio('mic');
-  });
-  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-    navigator.mediaDevices.addEventListener('devicechange', refreshAudioDevices);
-  }
-  refreshAudioDevices();
-
-  try {
-    const savedSrc = localStorage.getItem('pulse.audioSrc');
-    if (savedSrc && [...$('startAudioSrc').options].some((o) => o.value === savedSrc)) {
-      $('startAudioSrc').value = savedSrc;
-      $('audioSrc').value = savedSrc;
-    }
-  } catch (_) { /* ignore */ }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    $('startAudioSrc').value = 'mic';
-  }
-  syncAudioUi();
+  $('audioBtn').addEventListener('click', tryConnectAudio);
 
   // ======================================================================== boot
   function fatal(msg) {
@@ -1859,7 +1759,7 @@
     }
     audio.ctx.resume();
     yt.unlock();
-    await tryConnectAudio($('startAudioSrc').value);
+    await tryConnectAudio();
   });
 
   // Expose for debugging in DevTools.
