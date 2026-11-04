@@ -493,6 +493,7 @@
       confidence: Math.round(Math.max(rhythm.confidence(t), dancing ? 0.3 : 0) * 100) / 100,
       beat: beatPending,
       energy: dancing ? Math.round(danceEnergy * 100) / 100 : undefined,
+      source: join, // only heart-camera phones get a heartbeat ring on the display
     });
     beatPending = false;
     rhythmSending = true;
@@ -944,6 +945,7 @@
       signal: contact ? Math.round(detector.signal * 1000) / 1000 : 0,
       confidence: contact ? Math.round(detector.confidence * 100) / 100 : 0,
       beat: beatsSinceSend > 0,
+      source: 'heart',
     });
     beatsSinceSend = 0;
   }

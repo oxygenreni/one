@@ -444,14 +444,16 @@ test('socket flow: touch pad bursts, combos and the lock', async (t) => {
 
 test('PulseAggregator averages dancers\' movement energy and counts taps as beats', () => {
   const p = new PulseAggregator();
-  p.update('tapper', { bpm: 0, confidence: 0.4, beat: true }, 1000, { n: 1, hue: 0.1 });
-  p.update('dancer1', { bpm: 120, confidence: 0.6, energy: 0.8 }, 1000, { n: 2, hue: 0.2 });
-  p.update('dancer2', { bpm: 0, confidence: 0.3, energy: 0.4 }, 1000, { n: 3, hue: 0.3 });
-  p.update('bad', { bpm: 0, confidence: 0.3, energy: 'lots' }, 1000, { n: 4, hue: 0.4 });
+  p.update('tapper', { bpm: 0, confidence: 0.4, beat: true, source: 'tap' }, 1000, { n: 1, hue: 0.1 });
+  p.update('dancer1', { bpm: 120, confidence: 0.6, energy: 0.8, source: 'dance' }, 1000, { n: 2, hue: 0.2 });
+  p.update('heart', { bpm: 70, confidence: 0.8, source: 'heart' }, 1000, { n: 5, hue: 0.5 });
+  p.update('dancer2', { bpm: 0, confidence: 0.3, energy: 0.4, source: 'dance' }, 1000, { n: 3, hue: 0.3 });
+  p.update('bad', { bpm: 0, confidence: 0.3, energy: 'lots', source: 'dance' }, 1000, { n: 4, hue: 0.4 });
   const a = p.aggregate(1050);
   assert.equal(a.beats, 1, 'a first tap counts as a beat before any BPM is known');
   assert.equal(a.dancers, 2);
   assert.equal(a.motion, 0.6);
-  assert.equal(a.sensors, 4);
-  assert.equal(a.active, 1, 'only phones with a BPM set the tempo');
+  assert.equal(a.sensors, 5);
+  assert.deepEqual(a.hearts.map((h) => h[0]), [5], 'only heart-camera phones get a ring');
+  assert.equal(a.active, 2, 'only phones with a BPM set the tempo');
 });
