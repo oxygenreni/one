@@ -130,3 +130,4 @@ select, input {
   70% { opacity: 1; transform: translateX(-50%) scale(1); }
   100% { opacity: 0; transform: translateX(-50%) scale(1.05); }
 }
+.spotify-login { background: #1ed760; border-color: #1ed760; color: #04170a; font-weight: 600; }

@@ -1555,7 +1555,21 @@
         $('nowPlaying').textContent = `${s.playing ? '▶' : '❚❚'} ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')} · ${s.title}`;
       }
       $('playPause').textContent = s.playing ? '❚❚' : '▶';
+      $('spotifyLogin').hidden = !s.previewEnded;
     },
+  });
+
+  // Logged-out browsers only get 30 s Spotify previews. Log in in a new tab; when this tab gets
+  // focus back, the embed is rebuilt so it picks up the login (no reload, so audio capture stays).
+  let spotifyLoginPending = false;
+  $('spotifyLogin').addEventListener('click', () => {
+    window.open('https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F', '_blank', 'noopener');
+    spotifyLoginPending = true;
+  });
+  window.addEventListener('focus', () => {
+    if (!spotifyLoginPending) return;
+    spotifyLoginPending = false;
+    yt.reloadSpotify();
   });
   socket.on('yt:state', (s) => (ytState = s));
   const linkSource = sourcePicker([...document.querySelectorAll('.src-toggle button')], $('ytUrl'));

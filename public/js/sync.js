@@ -287,6 +287,15 @@
       });
     }
 
+    /** Rebuilds the Spotify embed, e.g. after logging in to Spotify in another tab. */
+    reloadSpotify() {
+      if (!this.sp) return;
+      try { if (this.sp.ctl) this.sp.ctl.destroy(); } catch (_) { /* ignore */ }
+      this.sp = null;
+      if (this.spWrap) this.spWrap.textContent = '';
+      this.enforce();
+    }
+
     _enforceSpotify(exp) {
       if (this.muted) {
         // No volume control on the embed: a muted page leaves Spotify to the display.
@@ -331,9 +340,11 @@
         if (!st.isPaused) sp.ctl.pause();
         this._setBlocked(false);
         this.drift = 0;
+        const preview = st.duration <= 31;
         this._status({
           ...exp,
-          note: st.duration <= 31 ? 'Spotify preview ended. Log in to Spotify in this browser for full songs.' : undefined,
+          previewEnded: preview,
+          note: preview ? 'Spotify preview ended. Log in to Spotify in this browser for full songs.' : undefined,
         });
         return;
       }
