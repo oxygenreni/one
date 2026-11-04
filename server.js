@@ -21,6 +21,10 @@ const CONTROL_COOLDOWN_MS = 400;
 const ANIM_MIN_INTERVAL_MS = 25;     // per-socket inbound animation-control throttle (clients send ~15 Hz)
 const ANIM_BROADCAST_MS = 50;        // coalesced animation-control rebroadcast (max 20 Hz)
 const MODE_COUNT = 7;
+const TOUCH_TAP_MS = 80;             // per-socket touch pad taps (max ~12/s)
+const TOUCH_DRAG_MS = 70;            // per-socket drag sparks (max ~14/s)
+const COMBO_WINDOW_MS = 450;         // taps from different phones this close together merge
+const COMBO_TICK_MS = 50;
 
 /**
  * Shared animation controls, set by anyone (phones or displays). Numbers are clamped to their
@@ -451,6 +455,44 @@ class AnimationControls {
   }
 }
 
+/**
+ * Touch pad combos: taps from different phones that land within one window merge into a single
+ * combo. The window opens with the first tap; when it closes, two or more phones make a combo.
+ * Each phone counts once per window (its latest tap is kept).
+ */
+class TapCombos {
+  constructor(windowMs = COMBO_WINDOW_MS) {
+    this.windowMs = windowMs;
+    this.taps = new Map(); // socket id -> { x, y, hue }
+    this.openedAt = 0;
+  }
+
+  tap(id, x, y, hue, t) {
+    if (this.taps.size === 0) this.openedAt = t;
+    this.taps.set(id, { x, y, hue });
+  }
+
+  /** Closes an expired window: returns { ids, size, x, y, hues } for a combo, else null. */
+  flush(t) {
+    if (this.taps.size === 0 || t - this.openedAt < this.windowMs) return null;
+    const list = [...this.taps.entries()];
+    this.taps.clear();
+    if (list.length < 2) return null;
+    const avg = (k) => list.reduce((s, [, v]) => s + v[k], 0) / list.length;
+    return {
+      ids: list.map(([id]) => id),
+      size: list.length,
+      x: avg('x'),
+      y: avg('y'),
+      hues: list.slice(0, 16).map(([, v]) => v.hue),
+    };
+  }
+
+  remove(id) {
+    this.taps.delete(id);
+  }
+}
+
 function lanAddresses() {
   const out = [];
   for (const list of Object.values(os.networkInterfaces())) {
@@ -548,6 +590,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
   const playback = new PlaybackState();
   const pulses = new PulseAggregator();
   const anim = new AnimationControls();
+  const combos = new TapCombos();
   let animDirty = false;
   const roomSize = (room) => io.sockets.adapter.rooms.get(room)?.size || 0;
   const broadcastState = () => io.emit('yt:state', playback.snapshot());
@@ -814,7 +857,29 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       if (data && playback.setDuration(data.id || data.videoId, finite(data.duration))) broadcastState();
     });
 
-    socket.on('disconnect', () => pulses.remove(socket.id));
+    // Touch pad: a tap bursts on the display at the same spot in the phone's colour; dragging leaves
+    // small sparks. Only 'locked' turns it off for non-hosts.
+    let lastTap = 0;
+    let lastDrag = 0;
+    socket.on('touch', (data) => {
+      if (role !== 'input' || !heart || !data || (!host && anim.lock === 'locked')) return;
+      const x = finite(data.x, -1);
+      const y = finite(data.y, -1);
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      const t = Date.now();
+      const drag = !!data.drag;
+      if (t - (drag ? lastDrag : lastTap) < (drag ? TOUCH_DRAG_MS : TOUCH_TAP_MS)) return;
+      if (drag) lastDrag = t;
+      else lastTap = t;
+      const r3 = (v) => Math.round(v * 1000) / 1000;
+      io.to('outputs').volatile.emit('touch:fx', { n: heart.n, h: heart.hue, x: r3(x), y: r3(y), d: drag ? 1 : 0 });
+      if (!drag) combos.tap(socket.id, x, y, heart.hue, t);
+    });
+
+    socket.on('disconnect', () => {
+      pulses.remove(socket.id);
+      combos.remove(socket.id);
+    });
   });
 
   const timers = [
@@ -849,6 +914,13 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       animDirty = false;
       io.emit('controls:state', anim.snapshot());
     }, ANIM_BROADCAST_MS),
+    setInterval(() => {
+      const c = combos.flush(Date.now());
+      if (!c) return;
+      const r3 = (v) => Math.round(v * 1000) / 1000;
+      io.to('outputs').emit('touch:combo', { size: c.size, x: r3(c.x), y: r3(c.y), hues: c.hues });
+      for (const id of c.ids) io.to(id).emit('touch:combo', { size: c.size });
+    }, COMBO_TICK_MS),
   ];
   server.on('close', () => timers.forEach(clearInterval));
 
@@ -929,4 +1001,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange };
+module.exports = { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, ANIM_DEFS, canChange };

@@ -118,3 +118,15 @@ select, input {
   .dock { bottom: 140px; width: 240px; }
   .keys { display: none; }
 }
+
+/* Touch pad combos: shown over the visuals even when the UI is hidden. */
+.combo-text { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 12; pointer-events: none;
+  font-size: clamp(32px, 6vw, 84px); font-weight: 900; letter-spacing: .06em; color: #fff; opacity: 0;
+  text-shadow: 0 0 18px #ff3d7f, 0 0 40px #7c5cff; }
+.combo-text.show { animation: comboPop 1.4s ease-out; }
+@keyframes comboPop {
+  0% { opacity: 0; transform: translateX(-50%) scale(.5); }
+  15% { opacity: 1; transform: translateX(-50%) scale(1.15); }
+  70% { opacity: 1; transform: translateX(-50%) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) scale(1.05); }
+}

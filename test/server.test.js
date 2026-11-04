@@ -9,7 +9,7 @@ const { io: ioc } = require('socket.io-client');
 
 const tmpUploads = fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-uploads-'));
 process.env.UPLOAD_DIR = tmpUploads;
-const { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange } = require('../server.js');
+const { createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, ANIM_DEFS, canChange } = require('../server.js');
 
 test.after(() => fs.rmSync(tmpUploads, { recursive: true, force: true }));
 
@@ -369,4 +369,75 @@ test('socket flow: media:submit plays the chosen source', async (t) => {
   const s = await state;
   assert.equal(s.media.uri, `spotify:track:${id}`);
   assert.equal(s.videoId, null);
+});
+
+test('TapCombos merges taps from different phones within one window', () => {
+  const c = new TapCombos(450);
+  c.tap('a', 0.2, 0.2, 0.1, 1000);
+  c.tap('a', 0.4, 0.4, 0.1, 1100); // same phone again: counts once, latest spot kept
+  assert.equal(c.flush(1300), null, 'window still open');
+  assert.equal(c.flush(1500), null, 'one phone is not a combo');
+  c.tap('a', 0.2, 0.5, 0.1, 2000);
+  c.tap('b', 0.6, 0.5, 0.7, 2200);
+  c.tap('c', 0.4, 0.8, 0.3, 2400);
+  const combo = c.flush(2450);
+  assert.equal(combo.size, 3);
+  assert.deepEqual(combo.ids, ['a', 'b', 'c']);
+  assert.ok(Math.abs(combo.x - 0.4) < 1e-9 && Math.abs(combo.y - 0.6) < 1e-9);
+  assert.equal(c.flush(5000), null, 'taps are used up');
+  c.tap('a', 0.5, 0.5, 0.1, 6000);
+  c.remove('a');
+  assert.equal(c.flush(7000), null);
+});
+
+test('socket flow: touch pad bursts, combos and the lock', async (t) => {
+  const { server, io } = createApp({ hostPin: '424242' });
+  await new Promise((r) => server.listen(0, r));
+  const url = `http://localhost:${server.address().port}`;
+  const clients = [];
+  t.after(() => {
+    clients.forEach((c) => c.close());
+    io.close();
+    server.close();
+  });
+  const connect = (role) =>
+    new Promise((resolve) => {
+      const c = ioc(url, { transports: ['websocket'], forceNew: true, extraHeaders: role === 'input' ? { 'cf-connecting-ip': '203.0.113.9' } : {} });
+      clients.push(c);
+      c.once('host:status', () => resolve(c));
+      c.on('connect', () => c.emit('hello', { role }));
+    });
+  const next = (c, ev, pred = () => true) => new Promise((resolve) => c.on(ev, (m) => pred(m) && resolve(m)));
+
+  const display = await connect('output');
+  const a = await connect('input');
+  const b = await connect('input');
+
+  const burst = next(display, 'touch:fx');
+  a.emit('touch', { x: 0.25, y: 0.75 });
+  const fx = await burst;
+  assert.equal(fx.x, 0.25);
+  assert.equal(fx.y, 0.75);
+  assert.equal(fx.d, 0);
+  assert.ok(fx.h >= 0 && fx.h < 1);
+
+  // Two phones tapping together make a combo, announced to the display and to both phones.
+  const comboDisplay = next(display, 'touch:combo');
+  const comboA = next(a, 'touch:combo');
+  b.emit('touch', { x: 0.75, y: 0.25 });
+  const combo = await comboDisplay;
+  assert.equal(combo.size, 2);
+  assert.equal(combo.x, 0.5);
+  assert.equal((await comboA).size, 2);
+
+  // Out-of-range input is ignored; locked turns the pad off for phones.
+  let count = 0;
+  display.on('touch:fx', () => count++);
+  a.emit('touch', { x: 2, y: 0.5 });
+  const locked = next(a, 'controls:state', (s) => s.lock === 'locked');
+  display.emit('host:lock', 'locked');
+  await locked;
+  b.emit('touch', { x: 0.5, y: 0.5 });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(count, 0);
 });

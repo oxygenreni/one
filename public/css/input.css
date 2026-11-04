@@ -187,3 +187,34 @@ main {
 .qr-card { display: grid; justify-items: center; gap: 10px; text-align: center; }
 .qr { width: min(240px, 70vw); height: auto; aspect-ratio: 1; background: #fff; border-radius: 12px; padding: 6px; }
 .mono { font-family: ui-monospace, Consolas, monospace; word-break: break-all; margin: 0; }
+
+/* Touch pad */
+.touch-pad {
+  --me: var(--accent);
+  position: relative; margin-top: 10px; aspect-ratio: 16 / 10; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--line); cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none;
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--me) 16%, transparent), transparent 70%),
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(255, 255, 255, .04) 23px 24px),
+    repeating-linear-gradient(90deg, transparent 0 23px, rgba(255, 255, 255, .04) 23px 24px),
+    #0e0914;
+}
+.touch-pad.disabled { opacity: .4; pointer-events: none; }
+.touch-pad.combo { animation: padFlash .7s ease-out; }
+.pad-ripple {
+  position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; pointer-events: none;
+  background: var(--me); box-shadow: 0 0 10px var(--me); animation: padSpark .6s ease-out forwards;
+}
+.pad-ripple.big { width: 22px; height: 22px; margin: -11px 0 0 -11px; background: transparent;
+  border: 3px solid var(--me); animation: padRipple .9s ease-out forwards; }
+@keyframes padSpark { from { transform: scale(1); opacity: .9; } to { transform: scale(.2); opacity: 0; } }
+@keyframes padRipple { from { transform: scale(.4); opacity: 1; } to { transform: scale(6); opacity: 0; } }
+@keyframes padFlash { from { box-shadow: inset 0 0 0 3px #ffd36b, 0 0 32px #ffd36b; } to { box-shadow: none; } }
+.combo-msg { font-weight: 800; color: #ffd36b; opacity: 0; }
+.combo-msg.combo { animation: comboPop 1.3s ease-out; }
+@keyframes comboPop {
+  0% { opacity: 0; transform: scale(.6); }
+  15% { opacity: 1; transform: scale(1.2); }
+  70% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; }
+}

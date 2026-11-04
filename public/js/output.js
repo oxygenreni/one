@@ -164,6 +164,64 @@
     return i;
   }
 
+  // ---- Touch pad bursts from phones (see input.js): a tap ripples out from the spot it lands on,
+  // drags leave small sparks, and taps from several phones at once merge into a rainbow shockwave.
+  const MAX_BURSTS = 32; // size of the uBursts arrays in fx-pre.frag / fx-final.frag
+  const bursts = [];     // { x, y (pad 0..1), hue (-1 = rainbow), power, age, life }
+  const burstData = new Float32Array(MAX_BURSTS * 4);
+  const burstHue = new Float32Array(MAX_BURSTS);
+
+  function addBurst(b) {
+    bursts.push(b);
+    if (bursts.length <= MAX_BURSTS) return;
+    // Full: drop whichever burst has the least left to show.
+    let weakest = 0;
+    let least = Infinity;
+    bursts.forEach((o, i) => {
+      const left = o.power * (1 - o.age / o.life);
+      if (left < least) {
+        least = left;
+        weakest = i;
+      }
+    });
+    bursts.splice(weakest, 1);
+  }
+
+  socket.on('touch:fx', (e) => {
+    const drag = e.d === 1;
+    addBurst({ x: e.x, y: e.y, hue: e.h, power: drag ? 0.5 : 1, age: 0, life: drag ? 0.9 : 1.8 });
+  });
+  socket.on('touch:combo', (c) => {
+    addBurst({ x: c.x, y: c.y, hue: -1, power: Math.min(4, 1.2 + 0.6 * c.size), age: 0, life: 2.6 });
+    pulse.kick = Math.min(1.5, pulse.kick + 0.2 * Math.min(c.size, 5)); // the whole scene surges too
+    showCombo(c.size);
+  });
+
+  function showCombo(size) {
+    const el = $('comboText');
+    el.textContent = `COMBO ×${size}`;
+    el.classList.remove('show');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('show');
+  }
+
+  /** Ages the bursts (real time) and packs them for the shaders: xy in aspectUv space, z age, w power. */
+  function burstUniforms(dt) {
+    const aspect = canvas.width / Math.max(1, canvas.height);
+    for (let i = bursts.length - 1; i >= 0; i--) {
+      bursts[i].age += dt;
+      if (bursts[i].age >= bursts[i].life) bursts.splice(i, 1);
+    }
+    bursts.forEach((b, i) => {
+      burstData[i * 4] = (b.x * 2 - 1) * aspect;
+      burstData[i * 4 + 1] = 1 - b.y * 2;
+      burstData[i * 4 + 2] = b.age;
+      burstData[i * 4 + 3] = b.power;
+      burstHue[i] = b.hue;
+    });
+    return bursts.length;
+  }
+
   function updatePulse(dt, nowMs) {
     // Heartbeat off = manual mode: the tempo control drives a full-strength synthetic heartbeat.
     const manual = !ctl.heartbeat;
@@ -539,8 +597,14 @@
       }
       const v = uniforms[name];
       switch (type) {
-        case gl.FLOAT: gl.uniform1f(loc, v); break;
-        case gl.FLOAT_VEC2: gl.uniform2f(loc, v[0], v[1]); break;
+        case gl.FLOAT:
+          if (size > 1) gl.uniform1fv(loc, v);
+          else gl.uniform1f(loc, v);
+          break;
+        case gl.FLOAT_VEC2:
+          if (size > 1) gl.uniform2fv(loc, v);
+          else gl.uniform2f(loc, v[0], v[1]);
+          break;
         case gl.FLOAT_VEC3: gl.uniform3f(loc, v[0], v[1], v[2]); break;
         case gl.FLOAT_VEC4:
           if (size > 1) gl.uniform4fv(loc, v);
@@ -881,67 +945,63 @@
       },
     };
 
-    const TARGETS = [
-      [-0.743643887037151, 0.13182590420533],
-      [-0.10109636384562, 0.95628651080914],
-      [0.360240443437614, -0.641313061064803],
-      [-1.7685736562992, 0.00173891131332],
-      [-0.7746806106269039, -0.1374168856037867],
-    ];
-    const MAX_LOG_ZOOM = 10.5; // float32 precision limit
-    const DIVE_START = 1.0;     // new dives begin already zoomed past the full-set view
-    const FADE_LEN = 1.6;       // log-zoom units spent crossfading into the next dive
-    const pickTarget = (not) => {
-      const i = Math.floor(Math.random() * (TARGETS.length - 1));
-      return i >= not ? i + 1 : i;
-    };
-    const diveUniforms = (d) => ({
-      center: TARGETS[d.target],
-      scale: 1.6 * Math.exp(-d.logZoom),
-      maxIter: Math.min(900, 140 + d.logZoom * 55),
-    });
-    /**
-     * Endless zoom-in: float32 runs out of precision near e^10.5 magnification, so before that
-     * a second dive into another hotspot starts zooming underneath and the two crossfade.
-     * Both keep zooming in throughout — the view never zooms back out.
-     */
+    // ---- Mandelbrot: an endless zoom into a Misiurewicz point, where the set is self-similar.
+    // Zooming in by |rho| and turning by arg(rho) (rho = the multiplier of the point's cycle) shows
+    // the same picture again, so once the dive is deep enough the zoom wraps back by exactly one
+    // such step and carries on forever without a cut. The shader iterates pixels relative to the
+    // point's orbit, so precision never runs out.
+    const MIS = { c: [-0.748240929755911, 0.136466389588626], pre: 20, period: 5 }; // match mandelbrot.frag
+    const misOrbit = (() => {
+      const n = MIS.pre + MIS.period;
+      const z = new Float32Array(n * 2);
+      let a = 0;
+      let b = 0;
+      let lnRho = 0;
+      let arg = 0;
+      for (let i = 0; i < n; i++) {
+        z[i * 2] = a;
+        z[i * 2 + 1] = b;
+        if (i >= MIS.pre) {
+          lnRho += Math.log(2 * Math.hypot(a, b));
+          arg += Math.atan2(b, a);
+        }
+        [a, b] = [a * a - b * b + MIS.c[0], 2 * a * b + MIS.c[1]];
+      }
+      return { z, lnRho, arg };
+    })();
+    const LOOP_AT = 16; // log-zoom where one step deeper looks the same (checked to ~98% of pixels)
+    const ITER_PER_ZOOM = MIS.period / misOrbit.lnRho; // escape times grow this much per log-zoom
     const mandel = {
       id: 'mandel',
       label: 'Mandelbrot',
-      dive: { target: 0, logZoom: 0 },
-      next: null,
+      logZoom: 0,
+      wraps: 0,
       rot: 0,
       bands: 0,
       update(dt) {
         // Pulse = zoom velocity; each heartbeat surges the dive forward.
         const vel = 0.07 + 0.32 * pulse.energy * (0.4 + 0.6 * pulse.strength) + 0.7 * pulse.beat;
-        this.dive.logZoom += dt * vel;
-        if (this.next) this.next.logZoom += dt * vel;
-        if (!this.next && this.dive.logZoom >= MAX_LOG_ZOOM - FADE_LEN) {
-          this.next = { target: pickTarget(this.dive.target), logZoom: DIVE_START };
-        }
-        if (this.next && this.dive.logZoom >= MAX_LOG_ZOOM) {
-          this.dive = this.next;
-          this.next = null;
+        this.logZoom += dt * vel;
+        if (this.logZoom >= LOOP_AT + misOrbit.lnRho) {
+          this.logZoom -= misOrbit.lnRho;
+          this.wraps++;
         }
         this.rot += dt * 0.04;
         this.bands += dt * (0.02 + 0.3 * audio.bass);
       },
       render(target, U) {
-        const a = diveUniforms(this.dive);
-        const b = this.next ? diveUniforms(this.next) : a;
-        const t = this.next ? clamp((this.dive.logZoom - (MAX_LOG_ZOOM - FADE_LEN)) / FADE_LEN, 0, 1) : 0;
+        const L = this.logZoom;
         draw(P.mandelbrot, {
           ...U,
-          uCenter: a.center,
-          uScale: a.scale,
-          uMaxIter: a.maxIter,
-          uCenter2: b.center,
-          uScale2: b.scale,
-          uMaxIter2: b.maxIter,
-          uMix: t * t * (3 - 2 * t),
-          uRotation: this.rot,
+          uOrbit: misOrbit.z,
+          uScale: 1.6 * Math.exp(-L),
+          // The first term is constant by the time the zoom wraps, so a wrap changes nothing.
+          uMaxIter: Math.min(600, 140 + L * 55) + L * ITER_PER_ZOOM,
+          // Turning with the zoom by arg(rho) per step lines the wrapped picture up exactly.
+          uRotation: this.rot + (misOrbit.arg * L) / misOrbit.lnRho,
           uBandShift: this.bands,
+          uMuOffset: this.wraps * MIS.period,
+          uMuRef: L * ITER_PER_ZOOM,
         }, target);
       },
     };
@@ -965,42 +1025,122 @@
       const l = Math.hypot(v[0], v[1], v[2]) || 1;
       return [v[0] / l, v[1] / l, v[2] / l];
     };
+    const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    // Never point (nearly) straight up or down, where the camera's up vector would flip.
+    const MAX_PITCH = 0.6;
+    const levelOut = (v) => norm3([v[0], clamp(v[1], -MAX_PITCH, MAX_PITCH), v[2]]);
+    /**
+     * Rotates unit vector `v` toward `target` by fraction `k` of the angle between them, at most
+     * `maxAngle` radians. Rotating (rather than blending) never flips, even toward the opposite way.
+     */
+    const MAX_TURN = 1.2; // rad/s
+    const turnToward = (v, target, k, maxAngle) => {
+      const c = clamp(dot3(v, target), -1, 1);
+      const angle = Math.min(Math.acos(c) * k, maxAngle);
+      if (angle < 1e-7) return v;
+      let perp = target.map((x, i) => x - v[i] * c);
+      if (Math.hypot(perp[0], perp[1], perp[2]) < 1e-6) perp = cross3(v, [0, 1, 0]); // exactly behind
+      perp = norm3(perp);
+      return norm3(v.map((x, i) => x * Math.cos(angle) + perp[i] * Math.sin(angle)));
+    };
+    /** How far the camera could fly along `dir` before reaching a wall (capped at LOOK_AHEAD). */
+    const LOOK_AHEAD = 0.6;
+    const AVOID = 0.02;     // walls closer than this steer the camera away (open space is ~0.01 wide)
+    const WALL_GAP = 0.003; // closer than this, the camera is also eased back out
+    const openDist = (p, dir, s) => {
+      // A "hit" is relative to where the camera is, so a camera already close to a wall can still
+      // tell the way out (away from it) from the way in.
+      const hit = Math.min(0.0015, 0.5 * apollonian(p[0], p[1], p[2], s));
+      let t = 0;
+      for (let i = 0; i < 48 && t < LOOK_AHEAD; i++) {
+        const d = apollonian(p[0] + dir[0] * t, p[1] + dir[1] * t, p[2] + dir[2] * t, s);
+        if (d < hit) break;
+        t += Math.max(d * 0.9, 0.0015);
+      }
+      return Math.min(t, LOOK_AHEAD);
+    };
     const flight = {
       id: 'flight',
       label: 'Fractal Flight',
       pos: [0.1, 0.05, 0.0],
-      fwd: [0.3, 0.1, 1],
+      fwd: norm3([0.3, 0.1, 1]),
+      aim: norm3([0.3, 0.1, 1]),
+      aimTimer: 0,
+      away: [0, 0, 0],
+      speed: 0,
+      room: 0.01, // smoothed distance to the nearest wall
       roll: 0,
       hue: 0.1,
       t: 0,
-      fracS: 1.15,
+      fracS: 1.12,
+      /**
+       * Looks ahead along a cone of directions and returns the most open one, nudged toward a slow
+       * wander and toward the current aim (so it doesn't flip-flop between two equal gaps).
+       */
+      pickAim(wander) {
+        const f = this.fwd;
+        const right = norm3(cross3(f, [0, 1, 0]));
+        const up = cross3(right, f);
+        let best = f;
+        let bestScore = -Infinity;
+        const consider = (dir, open = openDist(this.pos, dir, this.fracS)) => {
+          const score = open + 0.08 * dot3(dir, wander) + 0.05 * dot3(dir, this.aim);
+          if (score > bestScore) {
+            bestScore = score;
+            best = dir;
+          }
+        };
+        consider(f);
+        for (const tilt of [0.35, 0.7, 1.1]) {
+          for (let k = 0; k < 8; k++) {
+            const az = (k / 8) * TAU;
+            const side = Math.sin(tilt);
+            consider(levelOut([0, 1, 2].map((i) =>
+              f[i] * Math.cos(tilt) + (right[i] * Math.cos(az) + up[i] * Math.sin(az)) * side)));
+          }
+        }
+        return best;
+      },
       update(dt) {
         this.t += dt;
-        // Geometry breathes with the room; kept in a range where the fractal stays open.
-        this.fracS = clamp(1.12 + 0.08 * pulse.breath * (0.4 + 0.6 * pulse.strength) + 0.03 * pulse.beat, 1.04, 1.245);
-        const speed = 0.05 + 0.12 * pulse.energy * (0.4 + 0.6 * pulse.strength) + 0.25 * pulse.beat;
-        // Gentle wander so the path keeps discovering new chambers.
-        const w = [Math.sin(this.t * 0.31) * 0.6, Math.sin(this.t * 0.23 + 1.3) * 0.4, 1];
-        let f = norm3(this.fwd.map((c, i) => c + (norm3(w)[i] - c) * dt * 0.15));
+        // Geometry breathes slowly with the room. Any change reshapes the whole fractal around the
+        // camera, so it ignores single beats and eases in over seconds.
+        const sGoal = 1.12 + 0.04 * pulse.breath * (0.4 + 0.6 * pulse.strength);
+        this.fracS += (sGoal - this.fracS) * lerpK(dt, 2.5);
+
+        // Steering: aim at the most open direction (re-checked a few times a second) and away from
+        // nearby walls. The wall direction is smoothed so the distance field's noise can't jolt the view.
+        const wander = norm3([Math.sin(this.t * 0.31) * 0.6, Math.sin(this.t * 0.23 + 1.3) * 0.3, 1]);
+        this.aimTimer -= dt;
+        if (this.aimTimer <= 0) {
+          this.aimTimer = 0.2;
+          this.aim = this.pickAim(wander);
+        }
         const p = this.pos;
         const s = this.fracS;
         const d = apollonian(p[0], p[1], p[2], s);
-        const safe = 0.012;
-        if (d < safe * 3) {
-          // Steer away from the nearest wall using the distance field's gradient.
-          const e = 0.002;
-          const g = norm3([
-            apollonian(p[0] + e, p[1], p[2], s) - apollonian(p[0] - e, p[1], p[2], s),
-            apollonian(p[0], p[1] + e, p[2], s) - apollonian(p[0], p[1] - e, p[2], s),
-            apollonian(p[0], p[1], p[2] + e, s) - apollonian(p[0], p[1], p[2] - e, s),
-          ]);
-          const push = clamp((safe * 3 - d) / (safe * 3), 0, 1);
-          f = norm3(f.map((c, i) => c + g[i] * push * dt * 6));
-          for (let i = 0; i < 3; i++) p[i] += g[i] * push * dt * 0.05;
+        const e = clamp(d * 0.5, 0.0005, 0.002);
+        const g = norm3([
+          apollonian(p[0] + e, p[1], p[2], s) - apollonian(p[0] - e, p[1], p[2], s),
+          apollonian(p[0], p[1] + e, p[2], s) - apollonian(p[0], p[1] - e, p[2], s),
+          apollonian(p[0], p[1], p[2] + e, s) - apollonian(p[0], p[1], p[2] - e, s),
+        ]);
+        this.away = norm3(this.away.map((c, i) => c + (g[i] - c) * lerpK(dt, 0.6)));
+        const push = clamp((AVOID - d) / AVOID, 0, 1) * 1.2;
+        const target = norm3(this.aim.map((c, i) => c + this.away[i] * push));
+        this.fwd = levelOut(turnToward(this.fwd, target, lerpK(dt, 0.9), MAX_TURN * dt));
+        if (d < WALL_GAP) {
+          // Too close (the walls can shift as the geometry breathes): ease straight out.
+          for (let i = 0; i < 3; i++) p[i] += this.away[i] * (WALL_GAP - d) * lerpK(dt, 0.1);
         }
-        this.fwd = f;
-        const step = Math.min(speed * dt, Math.max(d * 0.5, 0.0004));
-        for (let i = 0; i < 3; i++) p[i] = fract((p[i] + f[i] * step + 1) / 2) * 2 - 1;
+        // Speed scales with the open space around the camera, so the flow looks the same in tight gaps
+        // and big chambers and there is always time to steer. Never step further than the wall.
+        this.room += (d - this.room) * lerpK(dt, 0.5);
+        const rate = 1.2 + 3 * pulse.energy * (0.4 + 0.6 * pulse.strength) + 1.5 * pulse.beat; // ~gaps per second
+        this.speed += (this.room * rate - this.speed) * lerpK(dt, 0.8);
+        const step = Math.min(this.speed * dt, Math.max(d * 0.6, 0.0002));
+        for (let i = 0; i < 3; i++) p[i] = fract((p[i] + this.fwd[i] * step + 1) / 2) * 2 - 1;
         this.roll += dt * (0.04 + 0.1 * audio.mid) * Math.sin(this.t * 0.05);
         this.hue += dt * (0.015 + 0.08 * audio.mid);
       },
@@ -1101,8 +1241,8 @@
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
 
-  /** Runs the enabled post-processing chain: scene -> kaleido/ripple -> echo -> bloom -> screen. */
-  function runFx(dt, U, heartCount) {
+  /** Runs the enabled post-processing chain: scene -> kaleido/ripples/bursts -> echo -> bloom -> screen. */
+  function runFx(dt, U, heartCount, burstCount) {
     const P = programs;
     let src = view.rtScene;
 
@@ -1114,7 +1254,7 @@
     fxState.kRot += dt * (0.05 + 0.25 * pulse.energy);
     const hueRotate = ctl.hue * TAU;
 
-    if (fx.kaleido || fx.ripple) {
+    if (fx.kaleido || fx.ripple || burstCount > 0) {
       const r = fxState.ripples;
       draw(P['fx-pre'], {
         ...U,
@@ -1125,6 +1265,8 @@
         uKZoom: 1.0 - 0.12 * pulse.breath * (0.4 + 0.6 * pulse.strength),
         uRipple: fx.ripple ? 1 : 0,
         uRipples: [0, 1, 2, 3].map((i) => (i < r.length ? r[i] : -1)),
+        uBurstCount: burstCount,
+        uBursts: burstData,
       }, view.rtPre);
       src = view.rtPre;
     }
@@ -1169,6 +1311,9 @@
       uHueRotate: hueRotate,
       uHeartCount: heartCount,
       uHearts: heartData,
+      uBurstCount: burstCount,
+      uBursts: burstData,
+      uBurstHue: burstHue,
     }, null);
   }
 
@@ -1268,7 +1413,8 @@
     // A colour shift only needs the final pass, so it also routes the scene through the FX chain.
     const heartCount = heartUniforms(dt);
     const showHearts = fx.hearts && heartCount > 0;
-    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || ctl.hue > 0.002;
+    const burstCount = burstUniforms(dt);
+    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || burstCount > 0 || ctl.hue > 0.002;
     // With FX enabled the mode renders off-screen and the FX chain composites to the screen.
     const sceneTarget = fxOn ? view.rtScene : null;
     if (fade < 1 && previous >= 0) {
@@ -1284,7 +1430,7 @@
       cur.update(sdt, U);
       cur.render(sceneTarget, U);
     }
-    if (fxOn) runFx(sdt, U, showHearts ? heartCount : 0);
+    if (fxOn) runFx(sdt, U, showHearts ? heartCount : 0, burstCount);
 
     hudTimer += dt;
     if (hudTimer > 0.25) {

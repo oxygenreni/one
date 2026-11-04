@@ -38,12 +38,14 @@ vec3 calcNormal(vec3 p, float eps) {
 void main() {
   vec2 uv = aspectUv();
   vec3 fwd = normalize(uCamFwd);
-  vec3 up0 = vec3(sin(uCamRoll), cos(uCamRoll), 0.0);
-  vec3 right = normalize(cross(fwd, up0));
+  // Frame from world up, then rolled around the view axis (output.js keeps |fwd.y| <= 0.6).
+  vec3 right0 = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+  vec3 up0 = cross(right0, fwd);
+  vec3 right = right0 * cos(uCamRoll) + up0 * sin(uCamRoll);
   vec3 up = cross(right, fwd);
   vec3 rd = normalize(fwd * 1.5 + uv.x * right + uv.y * up);
 
-  float t = 0.002;
+  float t = 0.0002; // start right at the camera, which can pass very close to a wall
   float orb = 0.0;
   float glow = 0.0;
   bool hit = false;

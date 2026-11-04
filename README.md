@@ -66,15 +66,21 @@ The display machine is the **host**: any page opened directly on the computer th
 
 | Lock | What phones (non-hosts) can do |
 | --- | --- |
-| Open (default) | Everything: mode, FX, sliders, Reset, links, uploads, play/pause |
-| Sliders only | Sliders only |
-| Locked | Nothing; they just add their heartbeat |
+| Open (default) | Everything: mode, FX, sliders, touch pad, Reset, links, uploads, play/pause |
+| Sliders only | Sliders and the touch pad |
+| Locked | Nothing; they just add their heartbeat (the touch pad is off too) |
 
 The server enforces the lock (`canChange` in `server.js`); the phone page only greys out what's not allowed. If a change is rejected, the sender gets the real state back so its controls snap back.
 
 ### Your own heartbeat
 
 Every phone gets its own colour (golden-ratio hues, so neighbours differ). The heart icon on the phone shows it. On the display, each phone with a good signal has a glowing dot in that colour, and each of its beats sends out a ring from it. This is the **Hearts** FX layer, on by default and limited to 32 at once. The server forwards per-phone beat counts in `pulse:agg` as `hearts: [[n, hue, beats, confidence], …]`. The rings are drawn last in `fx-final.frag`, after the colour shift, so each phone's colour matches what it shows.
+
+### Touch pad
+
+The phone page has a **Touch pad**. A tap sends a burst to the same spot on the display, in your phone's colour: a ring that ripples the image as it spreads. Dragging leaves a trail of smaller sparks. When two or more phones tap within the same 0.45 s, their taps merge into a **combo**: a rainbow shockwave from the middle of the taps, a beat surge through the whole scene, and "COMBO ×N" on the display and the phones. More phones make a bigger shockwave.
+
+The server rate-limits taps (about 12/s) and sparks (about 14/s) per phone and finds combos (`TapCombos` in `server.js`). It sends `touch:fx` and `touch:combo` to the displays, which draw up to 32 bursts at once in `fx-pre.frag` (the ripple) and `fx-final.frag` (the colour). Bursts show in every mode, with or without other FX.
 
 ### Spotify
 
@@ -128,9 +134,9 @@ A local oscillator runs at the room's BPM, and real beats from phones nudge its 
 | Reaction-Diffusion (Gray-Scott) | heat: simulation steps per frame, moves from coral/mycelium toward mitosis, beats seed new cells | iridescent thin-film colouring of the cells |
 | Fluid Tracers (stable fluids + vorticity) | each beat pushes the fluid from rotating emitters, a breathing "lung" at the centre | onsets drop vivid dye coloured by the strongest band |
 | Julia Set | the `c` constant orbits, breathes and folds on beats | bass drives contrast and lighting, treble the highlights, mids the hue |
-| Mandelbrot | zoom speed (surges on beats), an endless zoom-in that crossfades into a new hotspot before it runs out of floating-point precision | each colour band is lit by its own FFT bin |
+| Mandelbrot | zoom speed (surges on beats). The zoom heads for a self-similar (Misiurewicz) point: once deep enough, it steps back by exactly one repeat of the pattern, so it zooms in forever with no cut. Pixels are computed relative to that point's orbit, so precision never runs out | each colour band is lit by its own FFT bin |
 | Julia Fluid (Julia set + stable fluids) | moves the `c` constant, and beats push the fluid, whose currents warp the fractal | the fractal's edge sheds rainbow ink into the fluid (more with louder music), onsets drop dye |
-| Fractal Flight (ray-marched 3D Apollonian fractal) | camera speed and surges on beats, and the geometry "breathes" with the room | surface colour bands come from FFT bins, bass pumps the glow in the gaps, treble adds highlights |
+| Fractal Flight (ray-marched 3D Apollonian fractal) | camera speed (relative to the open space around it, so the flow stays smooth), and the geometry slowly "breathes" with the room. The camera looks ahead for open space and turns at a capped rate | surface colour bands come from FFT bins, bass pumps the glow in the gaps, treble adds highlights |
 
 **FX layers** form a post-processing chain: scene, then kaleidoscope and ripple, then echo, then bloom, then the screen. They work on any mode, and when all are off the chain is skipped entirely.
 

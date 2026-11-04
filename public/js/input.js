@@ -66,6 +66,7 @@
     ui.heart.style.color = color;
     $('youColor').hidden = false;
     $('youColor').style.color = color;
+    $('touchPad').style.setProperty('--me', color);
   });
 
   // ---------------------------------------------------------------- shared media (locked to server)
@@ -343,6 +344,8 @@
     [...ui.ytForm.querySelectorAll('input, button'), ...sourceButtons].forEach((el) => (el.disabled = !mediaAllowed()));
     $('mediaFile').disabled = !mediaAllowed();
     $('mediaFile').parentElement.classList.toggle('disabled', !mediaAllowed());
+    pad.classList.toggle('disabled', !touchAllowed());
+    $('touchHint').textContent = touchAllowed() ? TOUCH_HINT : '🔒 The host has locked the touch pad.';
     const manual = anim.heartbeat === false;
     const hb = $('hbState');
     hb.textContent = manual
@@ -352,6 +355,62 @@
     sliderEls.tempo.hint.textContent = manual ? 'Driving the visuals now' : 'Used when the heartbeat is off or nobody is sensing';
     sliderEls.tempo.wrap.classList.toggle('dim', !manual && roomSensing);
   }
+
+  // ---------------------------------------------------------------- touch pad
+  // A tap bursts on the display at the same spot, in this phone's colour; dragging leaves sparks.
+  // Taps from several phones within half a second merge into a shockwave (server.js -> TapCombos).
+  const pad = $('touchPad');
+  const TOUCH_HINT = $('touchHint').textContent;
+  const DRAG_SEND_MS = 70;
+  let lastDragSend = 0;
+  const touchAllowed = () => isHost || lockLevel() !== 'locked';
+
+  const padPoint = (e) => {
+    const r = pad.getBoundingClientRect();
+    const px = Math.min(Math.max(e.clientX - r.left, 0), r.width);
+    const py = Math.min(Math.max(e.clientY - r.top, 0), r.height);
+    return { px, py, x: px / r.width, y: py / r.height };
+  };
+
+  function padRipple(p, big) {
+    const s = document.createElement('span');
+    s.className = big ? 'pad-ripple big' : 'pad-ripple';
+    s.style.left = `${p.px}px`;
+    s.style.top = `${p.py}px`;
+    s.addEventListener('animationend', () => s.remove());
+    pad.appendChild(s);
+  }
+
+  pad.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (!touchAllowed()) return;
+    pad.setPointerCapture(e.pointerId);
+    const p = padPoint(e);
+    socket.volatile.emit('touch', { x: p.x, y: p.y });
+    padRipple(p, true);
+    if (navigator.vibrate) navigator.vibrate(8);
+  });
+  pad.addEventListener('pointermove', (e) => {
+    if (!pad.hasPointerCapture(e.pointerId) || !touchAllowed()) return;
+    const t = performance.now();
+    if (t - lastDragSend < DRAG_SEND_MS) return;
+    lastDragSend = t;
+    const p = padPoint(e);
+    socket.volatile.emit('touch', { x: p.x, y: p.y, drag: true });
+    padRipple(p, false);
+  });
+
+  socket.on('touch:combo', (c) => {
+    const msg = $('comboMsg');
+    msg.textContent = `Combo ×${c.size}!`;
+    // Restart the CSS animations even when combos come back to back.
+    for (const el of [msg, pad]) {
+      el.classList.remove('combo');
+      void el.offsetWidth;
+      el.classList.add('combo');
+    }
+    if (navigator.vibrate) navigator.vibrate([20, 40, 30]);
+  });
 
   // ---------------------------------------------------------------- camera PPG
   const detector = new PulseDetector();
