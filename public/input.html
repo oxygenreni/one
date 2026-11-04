@@ -20,6 +20,7 @@
         <div>
           <div class="bpm"><span id="bpm">--</span><small>BPM</small></div>
           <div id="confidence" class="muted">signal quality: –</div>
+          <div id="youColor" class="muted small" hidden>This is your colour on the display</div>
         </div>
       </div>
       <canvas id="wave" class="wave" width="600" height="120" aria-label="Live pulse waveform"></canvas>
@@ -40,6 +41,8 @@
         <button id="animReset" class="btn small" type="button">Reset</button>
       </div>
       <p id="hbState" class="status small"></p>
+      <p id="lockState" class="status small manual" hidden></p>
+      <div id="hostRow" class="host-row"></div>
       <div class="field-label">Visual</div>
       <div id="modeGrid" class="chips"></div>
       <div class="field-label">Effects</div>

@@ -9,7 +9,7 @@ const { io: ioc } = require('socket.io-client');
 
 const tmpUploads = fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-uploads-'));
 process.env.UPLOAD_DIR = tmpUploads;
-const { createApp, parseYouTubeId, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS } = require('../server.js');
+const { createApp, parseYouTubeId, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange } = require('../server.js');
 
 test.after(() => fs.rmSync(tmpUploads, { recursive: true, force: true }));
 
@@ -236,4 +236,91 @@ test('socket flow: animation controls are shared between many participants', asy
   const { s: late } = await connect({ role: 'output', controls: { mode: 0 } });
   assert.equal(late.mode, 4);
   assert.equal(late.heartbeat, false);
+});
+
+test('PulseAggregator reports beats per phone', () => {
+  const a = new PulseAggregator();
+  const me = { n: 1, hue: 0.618 };
+  a.update('a', { bpm: 60, confidence: 0.9, beat: true }, 0, me);
+  a.update('a', { bpm: 60, confidence: 0.9, beat: false }, 50, me);
+  a.update('b', { bpm: 70, confidence: 0.1, beat: true }, 50, { n: 2, hue: 0.2 }); // too weak to show
+  let r = a.aggregate(100);
+  assert.deepEqual(r.hearts, [[1, 0.618, 1, 0.9]]);
+  r = a.aggregate(150);
+  assert.deepEqual(r.hearts, [[1, 0.618, 0, 0.9]], 'beats reset each tick');
+});
+
+test('canChange follows the lock level', () => {
+  assert.equal(canChange('mode', false, 'open'), true);
+  assert.equal(canChange('mode', false, 'limited'), false);
+  assert.equal(canChange('hue', false, 'limited'), true);
+  assert.equal(canChange('hue', false, 'locked'), false);
+  assert.equal(canChange('mode', true, 'locked'), true);
+});
+
+test('socket flow: host lock, PIN, build info and per-phone colours', async (t) => {
+  const { server, io, hostPin, build } = createApp({ hostPin: '424242' });
+  assert.equal(hostPin, '424242');
+  await new Promise((r) => server.listen(0, r));
+  const url = `http://localhost:${server.address().port}`;
+  const clients = [];
+  t.after(() => {
+    clients.forEach((c) => c.close());
+    io.close();
+    server.close();
+  });
+  // `remote` = arrives through the tunnel like a real phone (Cloudflare adds cf-connecting-ip).
+  const connect = (role, remote) =>
+    new Promise((resolve) => {
+      const c = ioc(url, { transports: ['websocket'], forceNew: true, extraHeaders: remote ? { 'cf-connecting-ip': '203.0.113.9' } : {} });
+      clients.push(c);
+      const got = {};
+      c.on('server:info', (i) => (got.info = i));
+      c.on('you', (y) => (got.you = y));
+      c.once('host:status', (h) => resolve({ c, got, host: h }));
+      c.on('connect', () => c.emit('hello', { role }));
+    });
+  const nextState = (c, pred) => new Promise((resolve) => c.on('controls:state', (s) => pred(s) && resolve(s)));
+
+  const display = await connect('output', false);
+  assert.equal(display.host.host, true, 'the display machine is host');
+  assert.equal(display.host.pin, '424242');
+  assert.equal(display.got.info.build, build);
+  const phone = await connect('input', true);
+  const phone2 = await connect('input', true);
+  assert.equal(phone.host.host, false);
+  assert.equal(phone.host.pin, undefined, 'PIN never sent to non-hosts');
+  assert.ok(phone.got.you.hue >= 0 && phone.got.you.hue < 1);
+  assert.notEqual(phone.got.you.hue, phone2.got.you.hue);
+
+  // Phones can't lock; the host can.
+  phone.c.emit('host:lock', 'locked');
+  const limited = nextState(phone.c, (s) => s.lock === 'limited');
+  display.c.emit('host:lock', 'limited');
+  await limited;
+
+  // Limited: sliders pass, mode is rejected and the sender gets the real state back.
+  const rejected = nextState(phone.c, (s) => s.force === true);
+  phone.c.emit('controls:set', { mode: 5, hue: 0.4 });
+  assert.equal((await rejected).mode, 0);
+  await nextState(phone2.c, (s) => s.hue === 0.4);
+
+  const sub = await phone.c.timeout(2000).emitWithAck('yt:submit', 'https://youtu.be/dQw4w9WgXcQ');
+  assert.equal(sub.ok, false, 'music is host-only while locked');
+  const up = await fetch(`${url}/api/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'audio/mpeg', 'X-Filename': 'a.mp3', 'cf-connecting-ip': '203.0.113.9' },
+    body: Buffer.alloc(16),
+  });
+  assert.equal(up.status, 403);
+
+  // The PIN makes a phone host.
+  const wrong = await phone.c.timeout(2000).emitWithAck('host:pin', '000000');
+  assert.equal(wrong.ok, false);
+  await new Promise((r) => setTimeout(r, 2100)); // per-socket PIN attempt spacing
+  const right = await phone.c.timeout(2000).emitWithAck('host:pin', '424242');
+  assert.equal(right.ok, true);
+  const modeSet = nextState(phone2.c, (s) => s.mode === 5);
+  phone.c.emit('controls:set', { mode: 5 });
+  await modeSet;
 });

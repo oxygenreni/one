@@ -380,12 +380,13 @@
    * Uploads an audio/video file to the server, which then plays it in sync everywhere.
    * Uses XHR for upload progress. Resolves with the server's JSON reply.
    */
-  function uploadMedia(file, onProgress) {
+  function uploadMedia(file, onProgress, hostPin) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload');
       xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
       xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name || 'media'));
+      if (hostPin) xhr.setRequestHeader('X-Host-Pin', hostPin);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
       };
@@ -404,7 +405,55 @@
     });
   }
 
+  /**
+   * Notices when the server runs different code from the one this page started with: it calls
+   * onStale('updated') after a restart with new code, or onStale('outdated') when the server is
+   * too old to report its build at all.
+   */
+  function watchServerBuild(socket, onStale) {
+    let build = null;
+    let timer = null;
+    socket.on('server:info', (info) => {
+      clearTimeout(timer);
+      if (!info || !info.build) return;
+      if (build && info.build !== build) onStale('updated');
+      if (!build) build = info.build;
+    });
+    socket.on('connect', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => socket.connected && onStale('outdated'), 5000);
+    });
+  }
+
+  /** Fixed banner at the top of the page; `action` adds a button. Replaces any previous banner. */
+  function showBanner(text, action) {
+    let el = document.getElementById('serverBanner');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'serverBanner';
+      el.className = 'server-banner';
+      el.setAttribute('role', 'alert');
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    if (action) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = action.label;
+      b.addEventListener('click', action.run);
+      el.appendChild(b);
+    }
+  }
+
+  const STALE_TEXT = {
+    updated: 'The server was restarted with new code. Reload to get the latest version.',
+    outdated: 'The server is running old code. Restart it (npm run tunnel) to get the latest features.',
+  };
+
   root.TimeSync = TimeSync;
   root.MediaSync = MediaSync;
   root.uploadMedia = uploadMedia;
+  root.watchServerBuild = watchServerBuild;
+  root.showBanner = showBanner;
+  root.STALE_TEXT = STALE_TEXT;
 })(window);

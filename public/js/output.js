@@ -9,12 +9,25 @@
   // ======================================================================== networking
   const socket = io({ transports: ['websocket', 'polling'] });
   const timeSync = new TimeSync(socket);
+  // The display machine is host automatically; a display elsewhere on the network can enter the PIN.
+  let hostPin = null;
+  try { hostPin = sessionStorage.getItem('pulse.pin'); } catch (_) { /* ignore */ }
+  const host = { is: false, pin: null };
   socket.on('connect', () => {
-    socket.emit('hello', { role: 'output', controls: savedLook() });
+    socket.emit('hello', { role: 'output', controls: savedLook(), pin: hostPin || undefined });
     $('conn').classList.add('on');
   });
   socket.on('disconnect', () => $('conn').classList.remove('on'));
+  socket.on('host:status', (st) => {
+    host.is = !!st.host;
+    host.pin = st.pin || null;
+    if (onControls) onControls();
+  });
   timeSync.start();
+  // Reloading would drop audio capture and need another click on Start, so only offer it.
+  watchServerBuild(socket, (kind) =>
+    showBanner(STALE_TEXT[kind], kind === 'updated' ? { label: 'Reload', run: () => location.reload() } : null)
+  );
 
   /** This display's last mode/FX; the server adopts it if nobody has changed the shared controls yet. */
   function savedLook() {
@@ -23,7 +36,7 @@
       const m = parseInt(localStorage.getItem('pulse.mode'), 10);
       if (m >= 0) out.mode = m;
       const f = JSON.parse(localStorage.getItem('pulse.fx') || '{}');
-      for (const k of ['kaleido', 'echo', 'bloom', 'ripple']) if (typeof f[k] === 'boolean') out[k] = f[k];
+      for (const k of ['kaleido', 'echo', 'bloom', 'ripple', 'hearts']) if (typeof f[k] === 'boolean') out[k] = f[k];
     } catch (_) { /* ignore */ }
     return out;
   }
@@ -34,8 +47,8 @@
    * `ctl` is a per-frame smoothed copy so 15 Hz slider updates glide instead of stepping.
    */
   const controls = {
-    heartbeat: true, mode: 0, kaleido: false, echo: false, bloom: false, ripple: false,
-    tempo: 62, intensity: 1, heat: 0, breath: 1, speed: 1, audio: 1, hue: 0,
+    heartbeat: true, mode: 0, kaleido: false, echo: false, bloom: false, ripple: false, hearts: true,
+    lock: 'open', tempo: 62, intensity: 1, heat: 0, breath: 1, speed: 1, audio: 1, hue: 0,
   };
   const SMOOTHED = ['tempo', 'intensity', 'heat', 'breath', 'speed', 'audio', 'hue'];
   const ctl = { ...controls };
@@ -97,7 +110,12 @@
     pulse.sensors = a.sensors | 0;
     if (a.bpm > 0) pulse.targetBpm = a.bpm;
     pulse.targetStrength = a.active > 0 ? clamp(0.35 + a.confidence, 0.35, 1) : 0;
-    if (!controls.heartbeat) return; // heartbeat disabled: sensors are shown in the HUD but don't drive anything
+    if (!controls.heartbeat) {
+      // Heartbeat disabled: sensors are shown in the HUD but don't drive anything.
+      hearts.clear();
+      return;
+    }
+    trackHearts(a.hearts);
     if (a.beats > 0 && a.active > 0) {
       const n = Math.max(1, a.active);
       pulse.kick = Math.min(1.5, pulse.kick + (0.8 * a.beats) / n);
@@ -107,6 +125,44 @@
       pulse.phase -= (frac * 0.35) / n;
     }
   });
+
+  // ---- Per-phone hearts: each phone has its own colour and spot, and every one of its beats
+  // sends out a ring there, so people can find themselves in the visuals.
+  const MAX_HEART_RINGS = 32; // size of the uHearts array in fx-final.frag
+  const hearts = new Map();   // phone number -> { angle, radius, hue, age, conf, seen }
+  const heartData = new Float32Array(MAX_HEART_RINGS * 4);
+
+  function trackHearts(list) {
+    const t = performance.now();
+    for (const [n, hue, beats, conf] of list || []) {
+      let h = hearts.get(n);
+      if (!h) {
+        // Spot on a loose ring around the centre, placed by the phone's hue so colours spread out.
+        h = { angle: hue * TAU, radius: 0.55 + 0.25 * ((n * 0.381966) % 1), hue, age: 9 };
+        hearts.set(n, h);
+      }
+      h.conf = conf;
+      h.seen = t;
+      if (beats > 0) h.age = 0;
+    }
+    for (const [n, h] of hearts) if (t - h.seen > 2000) hearts.delete(n);
+  }
+
+  /** Ages the rings (real time, so they stay on the beat) and packs them for the shader. */
+  function heartUniforms(dt) {
+    const aspect = canvas.width / Math.max(1, canvas.height);
+    let i = 0;
+    for (const h of hearts.values()) {
+      h.age += dt;
+      if (i >= MAX_HEART_RINGS) continue;
+      heartData[i * 4] = Math.cos(h.angle) * h.radius * Math.min(1.3, aspect * 0.85);
+      heartData[i * 4 + 1] = Math.sin(h.angle) * h.radius;
+      heartData[i * 4 + 2] = h.age;
+      heartData[i * 4 + 3] = h.hue;
+      i++;
+    }
+    return i;
+  }
 
   function updatePulse(dt, nowMs) {
     // Heartbeat off = manual mode: the tempo control drives a full-strength synthetic heartbeat.
@@ -440,7 +496,8 @@
       const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
       for (let i = 0; i < n; i++) {
         const info = gl.getActiveUniform(p, i);
-        this.u[info.name] = { loc: gl.getUniformLocation(p, info.name), type: info.type };
+        // Arrays are reported as "name[0]"; they're set by their bare name from a flat typed array.
+        this.u[info.name.replace(/\[0\]$/, '')] = { loc: gl.getUniformLocation(p, info.name), type: info.type, size: info.size };
       }
     }
   }
@@ -460,7 +517,7 @@
     gl.useProgram(prog.p);
     let unit = 0;
     for (const name in prog.u) {
-      const { loc, type } = prog.u[name];
+      const { loc, type, size } = prog.u[name];
       if (!(name in uniforms)) {
         // Never leave an active sampler pointing at a stale unit (could be the render target).
         if (type === gl.SAMPLER_2D) {
@@ -475,7 +532,10 @@
         case gl.FLOAT: gl.uniform1f(loc, v); break;
         case gl.FLOAT_VEC2: gl.uniform2f(loc, v[0], v[1]); break;
         case gl.FLOAT_VEC3: gl.uniform3f(loc, v[0], v[1], v[2]); break;
-        case gl.FLOAT_VEC4: gl.uniform4f(loc, v[0], v[1], v[2], v[3]); break;
+        case gl.FLOAT_VEC4:
+          if (size > 1) gl.uniform4fv(loc, v);
+          else gl.uniform4f(loc, v[0], v[1], v[2], v[3]);
+          break;
         case gl.INT: gl.uniform1i(loc, v); break;
         case gl.SAMPLER_2D:
           gl.activeTexture(gl.TEXTURE0 + unit);
@@ -987,8 +1047,9 @@
     { id: 'echo', label: 'Echo', key: 'e' },
     { id: 'bloom', label: 'Bloom', key: 'b' },
     { id: 'ripple', label: 'Heart Ripple', key: 'r' },
+    { id: 'hearts', label: 'Hearts', key: 't' },
   ];
-  const fx = { kaleido: false, echo: false, bloom: false, ripple: false };
+  const fx = { kaleido: false, echo: false, bloom: false, ripple: false, hearts: true };
   try {
     Object.assign(fx, JSON.parse(localStorage.getItem('pulse.fx') || '{}'));
   } catch (_) { /* ignore */ }
@@ -1031,7 +1092,7 @@
   }
 
   /** Runs the enabled post-processing chain: scene -> kaleido/ripple -> echo -> bloom -> screen. */
-  function runFx(dt, U) {
+  function runFx(dt, U, heartCount) {
     const P = programs;
     let src = view.rtScene;
 
@@ -1090,7 +1151,15 @@
       bloomAmt = 0.3 + 0.8 * audio.level + 0.3 * pulse.beat;
     }
 
-    draw(P['fx-final'], { ...U, uSrc: src.tex, uBloom: view.bloomA.tex, uBloomAmt: bloomAmt, uHueRotate: hueRotate }, null);
+    draw(P['fx-final'], {
+      ...U,
+      uSrc: src.tex,
+      uBloom: view.bloomA.tex,
+      uBloomAmt: bloomAmt,
+      uHueRotate: hueRotate,
+      uHeartCount: heartCount,
+      uHearts: heartData,
+    }, null);
   }
 
   /** Adaptive resolution: keep the display smooth regardless of GPU or screen size. */
@@ -1187,7 +1256,9 @@
 
     const cur = modes[current];
     // A colour shift only needs the final pass, so it also routes the scene through the FX chain.
-    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || ctl.hue > 0.002;
+    const heartCount = heartUniforms(dt);
+    const showHearts = fx.hearts && heartCount > 0;
+    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || ctl.hue > 0.002;
     // With FX enabled the mode renders off-screen and the FX chain composites to the screen.
     const sceneTarget = fxOn ? view.rtScene : null;
     if (fade < 1 && previous >= 0) {
@@ -1203,7 +1274,7 @@
       cur.update(sdt, U);
       cur.render(sceneTarget, U);
     }
-    if (fxOn) runFx(sdt, U);
+    if (fxOn) runFx(sdt, U, showHearts ? heartCount : 0);
 
     hudTimer += dt;
     if (hudTimer > 0.25) {
@@ -1244,13 +1315,41 @@
   const toggleHeartbeat = () => setControl({ heartbeat: !controls.heartbeat });
   $('hbBtn').addEventListener('click', toggleHeartbeat);
 
+  // ---- Host lock: what phones may change. Click cycles open -> sliders only -> locked.
+  const LOCK_UI = {
+    open: { text: '🔓 Phones: all', next: 'limited' },
+    limited: { text: '🔒 Phones: sliders', next: 'locked' },
+    locked: { text: '🔒 Phones: none', next: 'open' },
+  };
+  function updateLockUi() {
+    const b = $('lockBtn');
+    const level = LOCK_UI[controls.lock] || LOCK_UI.open;
+    b.textContent = level.text;
+    b.className = `btn small lock-btn ${controls.lock}`;
+    b.title = host.is
+      ? `What phones can change (click to cycle). Host PIN ${host.pin}: enter it on a phone for full control there.`
+      : 'Only the host can change the lock. Click to enter the host PIN.';
+  }
+  $('lockBtn').addEventListener('click', () => {
+    if (host.is) return socket.emit('host:lock', (LOCK_UI[controls.lock] || LOCK_UI.open).next);
+    const attempt = (window.prompt('Host PIN (shown in the server window):') || '').trim();
+    if (!attempt) return;
+    socket.timeout(5000).emit('host:pin', attempt, (err, res) => {
+      if (err || !res.ok) return window.alert(err ? 'Server did not respond.' : res.error);
+      hostPin = attempt;
+      try { sessionStorage.setItem('pulse.pin', attempt); } catch (_) { /* ignore */ }
+    });
+  });
+
   onControls = () => {
     updateHeartbeatUi();
+    updateLockUi();
     // Mode/FX may arrive before the shaders have loaded; boot applies `controls.mode` then.
     if (modes) setMode(controls.mode, false);
     for (const d of FX_DEFS) setFx(d.id, controls[d.id], false);
   };
   updateHeartbeatUi();
+  updateLockUi();
 
   const ui = $('ui');
   let idleTimer = null;

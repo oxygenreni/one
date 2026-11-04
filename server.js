@@ -33,6 +33,7 @@ const ANIM_DEFS = {
   echo: { type: 'bool', def: false },
   bloom: { type: 'bool', def: false },
   ripple: { type: 'bool', def: false },
+  hearts: { type: 'bool', def: true },      // one coloured ring per phone on each of its beats
   tempo: { min: 40, max: 180, def: 62 },    // BPM when the heartbeat is off or no one is sensing
   intensity: { min: 0, max: 2, def: 1 },    // beat punch
   heat: { min: -1, max: 1, def: 0 },        // offset on the energy ("heat") value
@@ -41,6 +42,43 @@ const ANIM_DEFS = {
   audio: { min: 0, max: 2, def: 1 },        // audio reactivity
   hue: { min: 0, max: 1, def: 0 },          // global colour rotation (turns)
 };
+
+/**
+ * Host lock. Hosts (the display machine itself, or anyone who enters the host PIN) can always
+ * change everything. Others: 'open' = everything, 'limited' = sliders only, 'locked' = nothing.
+ * Media (links, uploads, play/pause) is host-only unless the lock is 'open'.
+ */
+const LOCK_LEVELS = ['open', 'limited', 'locked'];
+const SLIDER_KEYS = new Set(['tempo', 'intensity', 'heat', 'breath', 'speed', 'audio', 'hue']);
+const PIN_ATTEMPT_MS = 2000;          // per-socket
+const MAX_PIN_FAILURES_PER_MIN = 20;  // server-wide, so a 6-digit PIN can't be brute-forced
+const MAX_HEARTS = 64;                // per-phone heartbeats forwarded to displays
+
+function canChange(key, host, lock) {
+  if (host || lock === 'open') return true;
+  return lock === 'limited' && SLIDER_KEYS.has(key);
+}
+
+/** Direct connection from this machine (not through the tunnel or another proxy). */
+function isDirectLocal(address, headers) {
+  const loopback = address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+  return loopback && !headers['cf-connecting-ip'] && !headers['x-forwarded-for'];
+}
+
+/** Fingerprint of the server + page code, so open pages can tell when the server runs different code. */
+function computeBuildId() {
+  const h = crypto.createHash('sha1');
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else h.update(e.name).update(fs.readFileSync(p));
+    }
+  };
+  h.update(fs.readFileSync(__filename));
+  walk(path.join(__dirname, 'public'));
+  return h.digest('hex').slice(0, 12);
+}
 
 const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
@@ -222,18 +260,25 @@ class PulseAggregator {
     this.beats = 0;
   }
 
-  update(id, data, t) {
+  /** `heart` ({ n, hue }) identifies the phone on the display; beats are also counted per phone. */
+  update(id, data, t, heart = null) {
     if (!data || typeof data !== 'object') return false;
     let bpm = finite(data.bpm);
     bpm = bpm >= 35 && bpm <= 210 ? bpm : 0;
+    const prev = this.sensors.get(id);
     const sample = {
       bpm,
       signal: clamp(finite(data.signal), -1, 1),
       confidence: clamp(finite(data.confidence), 0, 1),
       t,
+      heart,
+      beats: prev ? prev.beats : 0,
     };
     this.sensors.set(id, sample);
-    if (data.beat === true && sample.confidence > 0.15) this.beats++;
+    if (data.beat === true && sample.confidence > 0.15) {
+      this.beats++;
+      sample.beats++;
+    }
     return true;
   }
 
@@ -247,11 +292,16 @@ class PulseAggregator {
     let signal = 0;
     let confSum = 0;
     let active = 0;
+    const hearts = []; // [n, hue, beats since last tick, confidence] per phone with a good signal
     for (const [id, s] of this.sensors) {
       if (t - s.t > PULSE_STALE_MS) {
         this.sensors.delete(id);
         continue;
       }
+      if (s.heart && s.confidence > 0.2 && hearts.length < MAX_HEARTS) {
+        hearts.push([s.heart.n, s.heart.hue, s.beats, Math.round(s.confidence * 100) / 100]);
+      }
+      s.beats = 0;
       confSum += s.confidence;
       signal += s.signal * s.confidence;
       if (s.bpm > 0 && s.confidence > 0.2) {
@@ -268,6 +318,7 @@ class PulseAggregator {
       beats: this.beats,
       active,
       sensors: n,
+      hearts,
       t,
     };
     this.beats = 0;
@@ -280,6 +331,7 @@ class AnimationControls {
   constructor() {
     this.version = 0;
     this.values = {};
+    this.lock = 'open'; // not part of reset: only a host changes it
     this.reset();
     // Until someone changes a control, the first display to connect may seed mode/FX from its saved choice.
     this.touched = false;
@@ -321,8 +373,27 @@ class AnimationControls {
     return this.touched ? false : this.set(patch, { seed: true });
   }
 
+  setLock(level) {
+    if (!LOCK_LEVELS.includes(level) || level === this.lock) return false;
+    this.lock = level;
+    this.version++;
+    return true;
+  }
+
+  /** Keeps only the keys this client may change. */
+  filter(patch, host) {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { allowed: null, rejected: false };
+    const allowed = {};
+    let rejected = false;
+    for (const k of Object.keys(patch)) {
+      if (canChange(k, host, this.lock)) allowed[k] = patch[k];
+      else rejected = true;
+    }
+    return { allowed, rejected };
+  }
+
   snapshot() {
-    return { ...this.values, version: this.version };
+    return { ...this.values, lock: this.lock, version: this.version };
   }
 }
 
@@ -364,14 +435,28 @@ function loadOrCreateCert() {
   return { key: pems.private, cert: pems.cert };
 }
 
-function createApp({ useHttps = false } = {}) {
+function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
   let publicUrl = null;
+  const build = computeBuildId();
+  const pin = /^\d{4,12}$/.test(String(hostPin || '')) ? String(hostPin) : String(crypto.randomInt(100000, 1000000));
+  let pinFailures = [];
+  /** Checks a PIN attempt; failures are capped server-wide per minute. */
+  const checkPin = (attempt) => {
+    const t = Date.now();
+    pinFailures = pinFailures.filter((f) => t - f < 60000);
+    if (pinFailures.length >= MAX_PIN_FAILURES_PER_MIN) return false;
+    const a = Buffer.from(String(attempt || '').slice(0, 12));
+    const b = Buffer.from(pin);
+    const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+    if (!ok) pinFailures.push(t);
+    return ok;
+  };
   const app = express();
   app.disable('x-powered-by');
   app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0 }));
   app.get('/healthz', (_req, res) => res.json({ ok: true }));
   app.get('/api/info', (req, res) => {
-    res.json({ inputUrls: inputUrls(req), https: useHttps });
+    res.json({ inputUrls: inputUrls(req), https: useHttps, build });
   });
   // QR code for the phone page, so guests can scan instead of typing the LAN address.
   const qrCache = new Map();
@@ -431,6 +516,10 @@ function createApp({ useHttps = false } = {}) {
   let lastUploadAt = 0;
   app.post('/api/upload', (req, res) => {
     const t = Date.now();
+    const host = isDirectLocal(req.socket.remoteAddress, req.headers) || (req.headers['x-host-pin'] && checkPin(req.headers['x-host-pin']));
+    if (!host && anim.lock !== 'open') {
+      return res.status(403).json({ ok: false, error: 'The host has locked the music. Ask them to unlock it.' });
+    }
     if (activeUploads >= MAX_CONCURRENT_UPLOADS) {
       return res.status(429).json({ ok: false, error: 'Another upload is in progress — try again shortly.' });
     }
@@ -516,20 +605,58 @@ function createApp({ useHttps = false } = {}) {
     }
   }
 
+  let heartCounter = 0;
+
   io.on('connection', (socket) => {
     let role = null;
     let lastPulse = 0;
     let lastSubmit = 0;
     let lastControl = 0;
+    let lastPinTry = 0;
+    let heart = null;
+    // The display machine itself is trusted; everyone else becomes host by entering the PIN.
+    let host = isDirectLocal(socket.handshake.address, socket.handshake.headers);
+    const sendHostStatus = () => socket.emit('host:status', { host, pin: host ? pin : undefined });
+    const mediaAllowed = () => host || anim.lock === 'open';
+
+    socket.emit('server:info', { build });
+
+    const tryPin = (attempt) => {
+      const t = Date.now();
+      if (host || t - lastPinTry < PIN_ATTEMPT_MS) return host;
+      lastPinTry = t;
+      if (checkPin(attempt)) host = true;
+      return host;
+    };
 
     socket.on('hello', (data) => {
       const r = data && data.role;
       if (role || (r !== 'input' && r !== 'output')) return;
       role = r;
       socket.join(r === 'input' ? 'inputs' : 'outputs');
-      if (r === 'output' && anim.seed(data.controls)) animDirty = true;
+      if (data.pin) tryPin(data.pin);
+      if (r === 'output' && host && anim.seed(data.controls)) animDirty = true;
+      if (r === 'input') {
+        // Golden-ratio hues keep each new phone's colour far from the previous ones.
+        heart = { n: ++heartCounter, hue: Math.round(((heartCounter * 0.618034) % 1) * 1000) / 1000 };
+        socket.emit('you', heart);
+      }
       socket.emit('yt:state', playback.snapshot());
       socket.emit('controls:state', anim.snapshot());
+      sendHostStatus();
+    });
+
+    socket.on('host:pin', (attempt, ack) => {
+      const reply = typeof ack === 'function' ? ack : () => {};
+      const wasHost = host;
+      const ok = tryPin(attempt);
+      if (ok && !wasHost) sendHostStatus();
+      reply({ ok, error: ok ? undefined : 'Wrong PIN (or too many tries, wait a moment).' });
+    });
+
+    socket.on('host:lock', (level) => {
+      if (!host) return;
+      if (anim.setLock(level)) animDirty = true;
     });
 
     socket.on('time:ping', (_t0, ack) => {
@@ -541,7 +668,7 @@ function createApp({ useHttps = false } = {}) {
       const t = Date.now();
       if (t - lastPulse < PULSE_MIN_INTERVAL_MS) return;
       lastPulse = t;
-      pulses.update(socket.id, data, t);
+      pulses.update(socket.id, data, t, heart);
     });
 
     socket.on('pulse:stop', () => pulses.remove(socket.id));
@@ -560,6 +687,7 @@ function createApp({ useHttps = false } = {}) {
     socket.on('yt:submit', (url, ack) => {
       const reply = typeof ack === 'function' ? ack : () => {};
       const t = Date.now();
+      if (!mediaAllowed()) return reply({ ok: false, error: 'The host has locked the music. Ask them to unlock it.' });
       if (t - lastSubmit < VIDEO_SUBMIT_COOLDOWN_MS) {
         return reply({ ok: false, error: 'Please wait a moment before submitting again.' });
       }
@@ -573,7 +701,7 @@ function createApp({ useHttps = false } = {}) {
 
     socket.on('yt:control', (action) => {
       const t = Date.now();
-      if (t - lastControl < CONTROL_COOLDOWN_MS) return;
+      if (!mediaAllowed() || t - lastControl < CONTROL_COOLDOWN_MS) return;
       lastControl = t;
       let changed = false;
       if (action === 'play') changed = playback.play();
@@ -582,18 +710,21 @@ function createApp({ useHttps = false } = {}) {
       if (changed) broadcastState();
     });
 
-    // Animation controls: anyone may change them; the latest value wins and is rebroadcast to all.
+    // Animation controls: anyone the lock allows may change them; the latest value wins and is
+    // rebroadcast to all. A rejected change gets the real state back so the sender's UI reverts.
     let lastAnim = 0;
     socket.on('controls:set', (patch) => {
       const t = Date.now();
       if (!role || t - lastAnim < ANIM_MIN_INTERVAL_MS) return;
       lastAnim = t;
-      if (anim.set(patch)) animDirty = true;
+      const { allowed, rejected } = anim.filter(patch, host);
+      if (allowed && anim.set(allowed)) animDirty = true;
+      if (rejected) socket.emit('controls:state', { ...anim.snapshot(), force: true });
     });
 
     socket.on('controls:reset', () => {
       const t = Date.now();
-      if (!role || t - lastControl < CONTROL_COOLDOWN_MS) return;
+      if (!role || !mediaAllowed() || t - lastControl < CONTROL_COOLDOWN_MS) return;
       lastControl = t;
       anim.reset();
       animDirty = true;
@@ -648,6 +779,8 @@ function createApp({ useHttps = false } = {}) {
     playback,
     pulses,
     anim,
+    build,
+    hostPin: pin,
     setPublicUrl(url) {
       publicUrl = url;
     },
@@ -692,11 +825,12 @@ function main() {
   const useHttps = process.argv.includes('--https') || process.env.HTTPS === '1';
   const useTunnel = process.argv.includes('--tunnel') || process.env.TUNNEL === '1';
   const port = Number(process.env.PORT) || (useHttps ? 8443 : 3000);
-  const { server, setPublicUrl } = createApp({ useHttps });
+  const { server, setPublicUrl, hostPin } = createApp({ useHttps });
   server.listen(port, () => {
     const proto = useHttps ? 'https' : 'http';
     console.log(`Pulse visualizer running:`);
     console.log(`  Display  ${proto}://localhost:${port}/output.html`);
+    console.log(`  Host PIN ${hostPin}  (enter on a phone for full control; set HOST_PIN to choose your own)`);
     for (const ip of lanAddresses()) console.log(`  Phones   ${proto}://${ip}:${port}/input.html  (same network only)`);
     if (useTunnel) {
       if (useHttps) console.log('  Note: --tunnel works best without --https (the tunnel already provides HTTPS).');
@@ -715,4 +849,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { createApp, parseYouTubeId, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS };
+module.exports = { createApp, parseYouTubeId, PlaybackState, PulseAggregator, AnimationControls, ANIM_DEFS, canChange };

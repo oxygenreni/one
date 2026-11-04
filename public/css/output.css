@@ -64,6 +64,12 @@ select, input {
 .hud-left { left: 14px; }
 .hb-btn { border-radius: 999px; border-color: rgba(255, 61, 127, 0.6); color: #ff9dbf; }
 .hb-btn.off { border-color: var(--line); color: var(--muted); }
+.lock-btn.limited, .lock-btn.locked { border-color: #ffd36b; color: #ffd36b; }
+
+/* Stays visible even when the rest of the UI auto-hides. */
+.server-banner { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 30; display: flex; gap: 12px;
+  align-items: center; padding: 10px 16px; border-radius: 12px; background: #ffd36b; color: #1a1300; font-weight: 600; }
+.server-banner button { appearance: none; border: 0; border-radius: 8px; padding: 6px 12px; background: #1a1300; color: #ffd36b; font: inherit; cursor: pointer; }
 .hud-right { right: 14px; gap: 8px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #ff8a6b; display: inline-block; }
 .dot.on { background: #7cf7d4; box-shadow: 0 0 8px #7cf7d4; }

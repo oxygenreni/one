@@ -31,8 +31,12 @@
   // ---------------------------------------------------------------- socket + sync
   const socket = io({ transports: ['websocket', 'polling'] });
   const timeSync = new TimeSync(socket);
+  // Host PIN entered on this phone (kept for the tab session so a reload stays host).
+  let hostPin = null;
+  try { hostPin = sessionStorage.getItem('pulse.pin'); } catch (_) { /* ignore */ }
+  let isHost = false;
   socket.on('connect', () => {
-    socket.emit('hello', { role: 'input' });
+    socket.emit('hello', { role: 'input', pin: hostPin || undefined });
     ui.conn.textContent = 'live';
     ui.conn.className = 'conn on';
   });
@@ -49,6 +53,20 @@
   });
   let roomSensing = false;
   timeSync.start();
+
+  // A server restarted with new code reloads this page, unless that would interrupt a running sensor.
+  watchServerBuild(socket, (kind) => {
+    if (kind === 'updated' && !running) return location.reload();
+    showBanner(STALE_TEXT[kind], kind === 'updated' ? { label: 'Reload', run: () => location.reload() } : null);
+  });
+
+  // Each phone gets its own colour; its beats show as rings of that colour on the display.
+  socket.on('you', (me) => {
+    const color = `hsl(${Math.round(me.hue * 360)}, 90%, 62%)`;
+    ui.heart.style.color = color;
+    $('youColor').hidden = false;
+    $('youColor').style.color = color;
+  });
 
   // ---------------------------------------------------------------- shared media (locked to server)
   const yt = new MediaSync('player', socket, timeSync, {
@@ -81,7 +99,7 @@
     yt.unlock();
     setMsg(`Uploading “${file.name}”…`);
     try {
-      await uploadMedia(file, (p) => ($('uploadProgress').textContent = `${Math.round(p * 100)}%`));
+      await uploadMedia(file, (p) => ($('uploadProgress').textContent = `${Math.round(p * 100)}%`), hostPin);
       setMsg('Uploaded — starting on every screen.', 'ok');
     } catch (err) {
       setMsg(err.message, 'error');
@@ -125,7 +143,7 @@
   // Everyone shares one set of controls (latest change wins). Ranges mirror ANIM_DEFS in server.js,
   // which clamps them anyway.
   const MODES = ['Domain Warp', 'Reaction-Diffusion', 'Fluid Tracers', 'Julia Set', 'Mandelbrot', 'Julia Fluid', 'Fractal Flight'];
-  const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple']];
+  const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple'], ['hearts', 'Hearts']];
   const pct = (v) => `${Math.round(v * 100)}%`;
   const SLIDERS = [
     { key: 'tempo', label: 'Tempo', min: 40, max: 180, step: 1, fmt: (v) => `${Math.round(v)} BPM` },
@@ -216,16 +234,6 @@
     sliderEls[d.key] = { wrap, input, out, hint, def: d };
   }
 
-  // A server started before the controls existed never sends them; say so instead of sitting greyed out.
-  socket.on('connect', () =>
-    setTimeout(() => {
-      if (!animReady && socket.connected) {
-        $('hbState').textContent = 'The server isn\'t sending animation controls. Restart it (npm run tunnel) to enable them.';
-        $('hbState').className = 'status small error';
-      }
-    }, 4000)
-  );
-
   $('animReset').addEventListener('click', () => {
     for (const k in holdUntil) holdUntil[k] = 0;
     socket.emit('controls:reset');
@@ -235,27 +243,91 @@
     const now = performance.now();
     for (const k in s) {
       // Don't yank a control out from under your finger or undo a change that is still in flight.
-      if (k in pendingCtl || dragging[k] || holdUntil[k] > now) continue;
+      // `force` = the server rejected a change from this phone, so show the real value right away.
+      if (!s.force && (k in pendingCtl || dragging[k] || holdUntil[k] > now)) continue;
       anim[k] = s[k];
     }
-    if (!animReady) {
-      animReady = true;
-      [...modeChips, ...fxChips, ...Object.values(sliderEls).map((e) => e.input)].forEach((el) => (el.disabled = false));
-    }
+    if (s.force) for (const k in holdUntil) holdUntil[k] = 0;
+    animReady = true;
     renderAnim();
   });
 
+  // ---- Host lock. Mirrors canChange() in server.js, which enforces it.
+  const SLIDER_KEYS = new Set(SLIDERS.map((d) => d.key));
+  const LOCKS = [['open', 'Open'], ['limited', 'Sliders only'], ['locked', 'Locked']];
+  const lockLevel = () => anim.lock || 'open';
+  const can = (key) => isHost || lockLevel() === 'open' || (lockLevel() === 'limited' && SLIDER_KEYS.has(key));
+  const mediaAllowed = () => isHost || lockLevel() === 'open';
+
+  socket.on('host:status', (st) => {
+    isHost = !!st.host;
+    renderHostRow();
+    renderAnim();
+  });
+
+  function renderHostRow() {
+    const row = $('hostRow');
+    row.textContent = '';
+    if (!isHost) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'link-btn';
+      b.textContent = 'I\'m the host';
+      b.addEventListener('click', askForPin);
+      row.appendChild(b);
+      return;
+    }
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = 'Host · phones can change:';
+    row.appendChild(label);
+    for (const [level, text] of LOCKS) {
+      const c = chip(text, 'chip', () => socket.emit('host:lock', level));
+      c.disabled = false;
+      c.classList.toggle('active', lockLevel() === level);
+      c.dataset.lock = level;
+      row.appendChild(c);
+    }
+  }
+
+  function askForPin() {
+    const attempt = (window.prompt('Host PIN (shown in the server window):') || '').trim();
+    if (!attempt) return;
+    socket.timeout(5000).emit('host:pin', attempt, (err, res) => {
+      if (err || !res.ok) return window.alert(err ? 'Server did not respond.' : res.error);
+      hostPin = attempt;
+      try { sessionStorage.setItem('pulse.pin', attempt); } catch (_) { /* ignore */ }
+    });
+  }
+
   function renderAnim() {
     if (!animReady) return;
-    modeChips.forEach((b, i) => b.classList.toggle('active', anim.mode === i));
-    fxChips.forEach((b, i) => b.classList.toggle('active', !!anim[FX[i][0]]));
+    modeChips.forEach((b, i) => {
+      b.classList.toggle('active', anim.mode === i);
+      b.disabled = !can('mode');
+    });
+    fxChips.forEach((b, i) => {
+      b.classList.toggle('active', !!anim[FX[i][0]]);
+      b.disabled = !can(FX[i][0]);
+    });
+    $('animReset').disabled = !mediaAllowed();
     const now = performance.now();
     for (const k in sliderEls) {
       const e = sliderEls[k];
+      e.input.disabled = !can(k);
       if (typeof anim[k] !== 'number') continue;
       if (!dragging[k] && !(holdUntil[k] > now)) e.input.value = anim[k];
       e.out.textContent = e.def.fmt(Number(e.input.value));
     }
+    $('hostRow').querySelectorAll('[data-lock]').forEach((c) => c.classList.toggle('active', c.dataset.lock === lockLevel()));
+    const lock = $('lockState');
+    lock.hidden = isHost || lockLevel() === 'open';
+    lock.textContent = lockLevel() === 'limited'
+      ? '🔒 The host has locked mode, effects and music. You can still use the sliders.'
+      : '🔒 The host has locked the controls and music.';
+    ui.ytForm.querySelectorAll('input, button').forEach((el) => (el.disabled = !mediaAllowed()));
+    $('mediaFile').disabled = !mediaAllowed();
+    $('mediaFile').parentElement.classList.toggle('disabled', !mediaAllowed());
     const manual = anim.heartbeat === false;
     const hb = $('hbState');
     hb.textContent = manual

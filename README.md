@@ -34,8 +34,9 @@ To try it without phones, run `npm run simulate -- http://localhost:3000 25`. Th
 | Key | Action |
 | --- | --- |
 | `1`–`7` / click | Switch visual mode (organic noise dissolve between modes). Shared with every display and phone. |
-| `K` `E` `B` `R` / click | Toggle the FX layers: Kaleidoscope, Echo, Bloom, Heart Ripple. They stack and are shared too. |
+| `K` `E` `B` `R` `T` / click | Toggle the FX layers: Kaleidoscope, Echo, Bloom, Heart Ripple, Hearts. They stack and are shared too. |
 | `M` / **♥ Heartbeat** button | Turn heartbeat mode off or on. When it's off, phone sensors are ignored and the **Tempo** slider sets the rhythm at full strength. |
+| **🔓 Phones** button | Host lock: cycles what phones may change between *all*, *sliders* only, and *none*. Hover over it to see the host PIN. |
 | `←` `→` | Cycle modes |
 | `H` | Hide the UI (it also hides itself after 3.5 s without mouse movement) |
 | `F` | Fullscreen |
@@ -58,6 +59,26 @@ Under **Animation controls**, the phone page offers the visual mode, the FX laye
 | Colour shift | Rotates the hue of the final image |
 
 The server holds one shared set of controls (`AnimationControls` in `server.js`). Anyone can change them, from a phone or a display, and the latest change wins. Updates are clamped and rate-limited per socket, then rebroadcast as `controls:state` at up to 20 Hz. Phones send at about 15 Hz while you drag. A control you're dragging, or changed in the last 0.7 s, ignores remote updates, so two people adjusting at once don't fight under each other's fingers. **Reset** restores the defaults for everyone. Displays smooth the values, so changes glide rather than step. The first display to connect after a server start seeds the mode and FX from its saved choice, until someone changes a control.
+
+### Host lock
+
+The display machine is the **host**: any page opened directly on the computer that runs the server, not through the tunnel. Anyone else becomes host by tapping **I'm the host** on the phone page and entering the **host PIN**. The server prints the PIN at startup, and the display shows it when you hover over its lock button. The PIN is random on each start; set `HOST_PIN=123456` to choose your own. Wrong guesses are limited to one every 2 s per connection and 20 a minute across the server.
+
+| Lock | What phones (non-hosts) can do |
+| --- | --- |
+| Open (default) | Everything: mode, FX, sliders, Reset, links, uploads, play/pause |
+| Sliders only | Sliders only |
+| Locked | Nothing; they just add their heartbeat |
+
+The server enforces the lock (`canChange` in `server.js`); the phone page only greys out what's not allowed. If a change is rejected, the sender gets the real state back so its controls snap back.
+
+### Your own heartbeat
+
+Every phone gets its own colour (golden-ratio hues, so neighbours differ). The heart icon on the phone shows it. On the display, each phone with a good signal has a glowing dot in that colour, and each of its beats sends out a ring from it. This is the **Hearts** FX layer, on by default and limited to 32 at once. The server forwards per-phone beat counts in `pulse:agg` as `hearts: [[n, hue, beats, confidence], …]`. The rings are drawn last in `fx-final.frag`, after the colour shift, so each phone's colour matches what it shows.
+
+### Out-of-date server warning
+
+At startup the server fingerprints its own code and the pages (`computeBuildId`) and sends the fingerprint to every page when it connects. If the server restarts with different code, open phones reload themselves, unless the pulse sensor is running, in which case they show a **Reload** banner. Displays always show the banner, because a reload would drop the audio capture. A server too old to send a fingerprint gets a "restart it" banner.
 
 ## How it works
 
