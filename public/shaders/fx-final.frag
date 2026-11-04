@@ -4,6 +4,8 @@ uniform sampler2D uSrc;
 uniform sampler2D uBloom;
 uniform float uBloomAmt;
 uniform float uHueRotate; // radians, from the shared colour-shift control
+uniform float uExposure;  // Glow slider
+uniform float uSaturation;
 uniform vec4 uHearts[32]; // per phone: xy = spot (aspectUv space), z = seconds since its last beat, w = hue
 uniform int uHeartCount;
 uniform vec4 uBursts[32]; // touch bursts: xy = spot (aspectUv space), z = age (s), w = power
@@ -23,10 +25,13 @@ vec3 hueToRgb(float h) {
 
 void main() {
   vec3 c = texture(uSrc, vUv).rgb;
-  if (uBloomAmt > 0.0) {
-    c += texture(uBloom, vUv).rgb * uBloomAmt;
-    c = 1.0 - exp(-c * 1.25); // soft shoulder instead of a hard clip at white
-  }
+  // Glow: brightness and saturation (both 1 at the slider's default), then bloom.
+  c *= uExposure;
+  c = max(mix(vec3(dot(c, vec3(0.299, 0.587, 0.114))), c, uSaturation), vec3(0.0));
+  if (uBloomAmt > 0.0) c += texture(uBloom, vUv).rgb * uBloomAmt;
+  // Soft shoulder instead of a hard clip at white, eased in as things get brighter.
+  float shoulder = uBloomAmt > 0.0 ? 1.0 : clamp((uExposure - 1.0) * 2.0, 0.0, 1.0);
+  c = mix(c, 1.0 - exp(-c * 1.25), shoulder);
   if (uHueRotate != 0.0) c = max(hueRotate(c, uHueRotate), vec3(0.0));
 
   // Hearts and bursts are drawn after the colour shift so each keeps the colour shown on its phone.

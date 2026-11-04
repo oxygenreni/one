@@ -38,12 +38,11 @@ const ANIM_DEFS = {
   bloom: { type: 'bool', def: false },
   ripple: { type: 'bool', def: false },
   hearts: { type: 'bool', def: true },      // one coloured ring per phone on each of its beats
-  tempo: { min: 40, max: 180, def: 62 },    // BPM when the heartbeat is off or no one is sensing
-  intensity: { min: 0, max: 2, def: 1 },    // beat punch
-  heat: { min: -1, max: 1, def: 0 },        // offset on the energy ("heat") value
-  breath: { min: 0, max: 2, def: 1 },       // breathing depth
+  tempo: { min: 40, max: 180, def: 62 },    // BPM in manual mode, or when nobody joins and no beat is heard
+  // Big "macro" sliders: each one moves several things at once (see output.js -> updateControls).
+  chaos: { min: 0, max: 1, def: 0.33 },     // beat punch, heat, breathing, audio gain, then warp / zoom punch / glitch
+  glow: { min: 0, max: 1, def: 0.2 },       // brightness, saturation, then bloom
   speed: { min: 0.1, max: 3, def: 1 },      // animation time scale
-  audio: { min: 0, max: 2, def: 1 },        // audio reactivity
   hue: { min: 0, max: 1, def: 0 },          // global colour rotation (turns)
 };
 
@@ -53,7 +52,7 @@ const ANIM_DEFS = {
  * Media (links, uploads, play/pause) is host-only unless the lock is 'open'.
  */
 const LOCK_LEVELS = ['open', 'limited', 'locked'];
-const SLIDER_KEYS = new Set(['tempo', 'intensity', 'heat', 'breath', 'speed', 'audio', 'hue']);
+const SLIDER_KEYS = new Set(['tempo', 'chaos', 'glow', 'speed', 'hue']);
 const PIN_ATTEMPT_MS = 2000;          // per-socket
 const MAX_PIN_FAILURES_PER_MIN = 20;  // server-wide, so a 6-digit PIN can't be brute-forced
 const MAX_HEARTS = 64;                // per-phone heartbeats forwarded to displays

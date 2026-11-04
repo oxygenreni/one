@@ -163,13 +163,11 @@
   const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple'], ['hearts', 'Hearts']];
   const pct = (v) => `${Math.round(v * 100)}%`;
   const SLIDERS = [
+    { key: 'chaos', label: '🌀 Chaos', min: 0, max: 1, step: 0.01, fmt: pct, hint: 'Calm ← → harder beats, bending, zoom punches and glitches' },
+    { key: 'glow', label: '✨ Glow', min: 0, max: 1, step: 0.01, fmt: pct, hint: 'Dim and soft ← → bright, vivid and blooming' },
+    { key: 'speed', label: '⏩ Speed', min: 0.1, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×` },
+    { key: 'hue', label: '🎨 Colour', min: 0, max: 1, step: 0.005, fmt: (v) => `${Math.round(v * 360)}°`, hint: 'Turns every colour around the colour wheel' },
     { key: 'tempo', label: 'Tempo', min: 40, max: 180, step: 1, fmt: (v) => `${Math.round(v)} BPM` },
-    { key: 'intensity', label: 'Beat intensity', min: 0, max: 2, step: 0.01, fmt: pct },
-    { key: 'heat', label: 'Heat', min: -1, max: 1, step: 0.01, fmt: (v) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}`, hint: 'Calmer ← → wilder' },
-    { key: 'breath', label: 'Breathing', min: 0, max: 2, step: 0.01, fmt: pct },
-    { key: 'speed', label: 'Motion speed', min: 0.1, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×` },
-    { key: 'audio', label: 'Audio reactivity', min: 0, max: 2, step: 0.01, fmt: pct },
-    { key: 'hue', label: 'Colour shift', min: 0, max: 1, step: 0.005, fmt: (v) => `${Math.round(v * 360)}°` },
   ];
   const CONTROL_SEND_MS = 66; // ~15 Hz while dragging
   const HOLD_MS = 700;        // ignore remote values for a control this long after you last changed it

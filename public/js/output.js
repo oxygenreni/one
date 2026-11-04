@@ -48,9 +48,9 @@
    */
   const controls = {
     heartbeat: true, mode: 0, kaleido: false, echo: false, bloom: false, ripple: false, hearts: true,
-    lock: 'open', tempo: 62, intensity: 1, heat: 0, breath: 1, speed: 1, audio: 1, hue: 0,
+    lock: 'open', tempo: 62, chaos: 0.33, glow: 0.2, speed: 1, hue: 0,
   };
-  const SMOOTHED = ['tempo', 'intensity', 'heat', 'breath', 'speed', 'audio', 'hue'];
+  const SMOOTHED = ['tempo', 'chaos', 'glow', 'speed', 'hue'];
   const ctl = { ...controls };
   let controlsReceived = false;
   let onControls = null; // set once the renderer exists: applies mode/FX and refreshes the UI
@@ -72,7 +72,27 @@
     const k = lerpK(dt, 0.12);
     for (const key of SMOOTHED) ctl[key] += (controls[key] - ctl[key]) * k;
     ctl.heartbeat = controls.heartbeat;
+    // Chaos is a macro: up to its default it scales the rhythm (calm below it), and above the
+    // default it also bends, punches and glitches the picture (see runFx).
+    const c = ctl.chaos;
+    ctl.intensity = 0.25 + 2.25 * c;     // beat punch (1 at the default)
+    ctl.heat = -0.6 + 1.8 * c;           // energy offset (0 at the default)
+    ctl.breath = 0.2 + 2.4 * c;          // breathing depth (1 at the default)
+    ctl.audio = 0.5 + 1.5 * c;           // audio gain (1 at the default)
+    const wild = clamp((c - CHAOS_DEF) / (1 - CHAOS_DEF), 0, 1);
+    ctl.warp = wild * wild;              // swirl and wobble
+    ctl.punch = wild;                    // zoom-in on every beat
+    ctl.glitch = clamp((c - 0.6) / 0.4, 0, 1); // RGB split on beats and bass hits
+    // Glow is a macro too: dim and grey at 0, normal at its default, bright, vivid and blooming at 1.
+    const g = ctl.glow;
+    const lo = clamp(g / GLOW_DEF, 0, 1);
+    const hi = clamp((g - GLOW_DEF) / (1 - GLOW_DEF), 0, 1);
+    ctl.exposure = 0.35 + 0.65 * lo + 1.3 * hi;
+    ctl.saturation = 0.2 + 0.8 * lo + 1.0 * hi;
+    ctl.bloomBoost = 1.4 * hi;
   }
+  const CHAOS_DEF = 0.33; // match ANIM_DEFS in server.js
+  const GLOW_DEF = 0.2;
 
   fetch('/api/info')
     .then((r) => r.json())
@@ -1337,7 +1357,8 @@
     fxState.kRot += dt * (0.05 + 0.25 * pulse.energy);
     const hueRotate = ctl.hue * TAU;
 
-    if (fx.kaleido || fx.ripple || burstCount > 0) {
+    const chaosFx = ctl.warp > 0.001 || ctl.punch > 0.001 || ctl.glitch > 0.001;
+    if (fx.kaleido || fx.ripple || burstCount > 0 || chaosFx) {
       const r = fxState.ripples;
       draw(P['fx-pre'], {
         ...U,
@@ -1350,6 +1371,9 @@
         uRipples: [0, 1, 2, 3].map((i) => (i < r.length ? r[i] : -1)),
         uBurstCount: burstCount,
         uBursts: burstData,
+        uWarp: ctl.warp,
+        uPunch: ctl.punch * pulse.beat * 0.12,
+        uSplit: ctl.glitch * (0.012 * pulse.beat + 0.02 * audio.onset),
       }, view.rtPre);
       src = view.rtPre;
     }
@@ -1375,7 +1399,7 @@
     }
 
     let bloomAmt = 0;
-    if (fx.bloom) {
+    if (fx.bloom || ctl.bloomBoost > 0.01) {
       const tx = 1 / view.bloomA.w;
       const ty = 1 / view.bloomA.h;
       draw(P['fx-bright'], { uSrc: src.tex, uThreshold: 0.68 - 0.12 * audio.level }, view.bloomA);
@@ -1383,7 +1407,7 @@
         draw(P['fx-blur'], { uSrc: view.bloomA.tex, uDir: [tx * spread, 0] }, view.bloomB);
         draw(P['fx-blur'], { uSrc: view.bloomB.tex, uDir: [0, ty * spread] }, view.bloomA);
       }
-      bloomAmt = 0.3 + 0.8 * audio.level + 0.3 * pulse.beat;
+      bloomAmt = (fx.bloom ? 0.3 + 0.8 * audio.level + 0.3 * pulse.beat : 0) + ctl.bloomBoost * (0.7 + 0.5 * audio.level);
     }
 
     draw(P['fx-final'], {
@@ -1392,6 +1416,8 @@
       uBloom: view.bloomA.tex,
       uBloomAmt: bloomAmt,
       uHueRotate: hueRotate,
+      uExposure: ctl.exposure,
+      uSaturation: ctl.saturation,
       uHeartCount: heartCount,
       uHearts: heartData,
       uBurstCount: burstCount,
@@ -1497,7 +1523,8 @@
     const heartCount = heartUniforms(dt);
     const showHearts = fx.hearts && heartCount > 0;
     const burstCount = burstUniforms(dt);
-    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || burstCount > 0 || ctl.hue > 0.002;
+    const looks = ctl.hue > 0.002 || Math.abs(ctl.exposure - 1) > 0.01 || Math.abs(ctl.saturation - 1) > 0.01 || ctl.warp > 0.001 || ctl.punch > 0.001 || ctl.glitch > 0.001;
+    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || burstCount > 0 || looks;
     // With FX enabled the mode renders off-screen and the FX chain composites to the screen.
     const sceneTarget = fxOn ? view.rtScene : null;
     if (fade < 1 && previous >= 0) {

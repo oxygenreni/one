@@ -60,17 +60,15 @@ A tap or dance phone that goes quiet for 3 s leaves the room until it beats agai
 
 ## Animation controls (phones)
 
-Under **Animation controls**, the phone page offers the visual mode, the FX layers and these sliders:
+Under **Animation controls**, the phone page offers the visual mode, the FX layers and these sliders. Chaos and Glow are "macro" sliders that each move several things at once (`updateControls` in `output.js`); the Chaos picture effects run in `fx-pre.frag`, Glow in `fx-final.frag`.
 
 | Slider | Effect |
 | --- | --- |
-| Tempo (40–180 BPM) | The rhythm when heartbeat mode is off or nobody is sensing. It replaces the old fixed 62 BPM idle. |
-| Beat intensity | How hard each beat hits (`uBeat`, `uPulse`) |
-| Heat | Shifts the energy value calmer or wilder |
-| Breathing | Depth of the inhale/exhale motion |
-| Motion speed | Time scale of every animation and simulation. The heartbeat itself is not affected. |
-| Audio reactivity | Gain on the FFT bands and onset detection. 0 ignores the music. |
-| Colour shift | Rotates the hue of the final image |
+| 🌀 Chaos | One big "how wild" control. Below its default it calms everything: softer beats, less breathing, less reaction to the music. Above it, beats hit harder and the whole picture starts to swirl and wobble and punch in on every beat. Past 60% the colour channels split apart on beats and bass hits. |
+| ✨ Glow | Dim and grey at 0, normal at its default (20%), then brighter, more vivid and blooming up to 100%. |
+| ⏩ Speed | Time scale of every animation and simulation. The beat itself is not affected. |
+| 🎨 Colour | Turns every colour around the colour wheel. |
+| Tempo (40–180 BPM) | The rhythm in Manual tempo mode, or when nobody joins and no beat is heard in the music. |
 
 The server holds one shared set of controls (`AnimationControls` in `server.js`). Anyone can change them, from a phone or a display, and the latest change wins. Updates are clamped and rate-limited per socket, then rebroadcast as `controls:state` at up to 20 Hz. Phones send at about 15 Hz while you drag. A control you're dragging, or changed in the last 0.7 s, ignores remote updates, so two people adjusting at once don't fight under each other's fingers. **Reset** restores the defaults for everyone. Displays smooth the values, so changes glide rather than step. The first display to connect after a server start seeds the mode and FX from its saved choice, until someone changes a control.
 
