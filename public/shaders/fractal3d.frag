@@ -77,7 +77,7 @@ void main() {
     float spec = pow(max(dot(reflect(rd, n), L), 0.0), 20.0);
     float ao = clamp(1.0 - steps / float(MAX_STEPS), 0.0, 1.0);
     col = base * (0.15 + 0.85 * diff) * (0.4 + 0.6 * ao) * (0.6 + 1.4 * bin);
-    col += spec * (0.25 + 1.5 * uTreble);
+    col += spec * (0.25 + 1.5 * uTreble + 2.5 * uSpark);
     col = mix(col, fogCol, 1.0 - exp(-t * 0.8));
   }
 

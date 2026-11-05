@@ -32,7 +32,7 @@ void main() {
   vec3 bg = mix(vec3(0.02, 0.01, 0.03), vec3(0.08, 0.04, 0.06), a);
   float cell = smoothstep(0.08, 0.32, b);
   vec3 col = mix(bg, irid * (0.35 + 0.9 * diff), cell);
-  col += spec * cell * (0.4 + 1.5 * uTreble);
+  col += spec * cell * (0.4 + 1.5 * uTreble + 2.5 * uSpark);
 
   // Membrane edges glow with the heartbeat.
   float membrane = smoothstep(0.0, 0.25, length(vec2(bx, by))) * (1.0 - cell * 0.5);

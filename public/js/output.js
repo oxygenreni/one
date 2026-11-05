@@ -6,7 +6,7 @@
   const lerpK = (dt, tau) => 1 - Math.exp(-dt / tau);
   const TAU = Math.PI * 2;
   const smooth01 = (x) => x * x * (3 - 2 * x); // smoothstep on 0..1
-  const BEAT_ATTACK_S = 0.07;                   // how fast the beat swells into each kick
+  const BEAT_ATTACK_S = 0.035;                  // how fast the beat swells into each kick
   const WAVE_RISE_S = 0.09;                     // how long the beat waveform takes to swell
 
   // ======================================================================== networking
@@ -128,6 +128,7 @@
     motion: 0,       // smoothed movement energy of dancing phones
     targetMotion: 0,
     source: 'tempo', // what sets the rhythm: 'phones', 'music' or 'tempo'
+    seenOnsets: 0,   // audio hits already turned into kicks
   };
 
   socket.on('pulse:agg', (a) => {
@@ -146,7 +147,8 @@
     // Every beat kicks, even a first tap that has no BPM yet.
     if (a.beats > 0) {
       const n = Math.max(1, a.active);
-      pulse.kick = Math.min(1.5, pulse.kick + (0.8 * a.beats) / n);
+      // Each tap/jolt/heartbeat lands visibly: sqrt keeps a single phone's beat strong in a full room.
+      pulse.kick = Math.min(1.5, pulse.kick + (0.9 * a.beats) / Math.sqrt(n));
       pulse.lastRealBeat = performance.now();
       // Pull the oscillator toward observed beats; with many hearts the nudges average out.
       const at = pulse.phase + pulse.phaseNudge; // where the clock is headed, counting corrections in flight
@@ -556,9 +558,22 @@
     if (Math.floor(pulse.phase) > Math.floor(prev)) {
       pulse.beatEvents++;
       const sinceReal = nowMs - pulse.lastRealBeat;
-      pulse.kick = Math.max(pulse.kick, manual || onMusic || (real && sinceReal < 2500) ? 0.75 : real ? 0.6 : 0.35);
+      const period = 60000 / Math.max(30, pulse.bpm);
+      const sinceHit = nowMs - audio.lastOnsetMs;
+      let k;
+      if (manual || onMusic) k = 0.75;
+      // A phone's beat just kicked: the clock only fills the gaps, so taps aren't doubled up.
+      else if (real) k = sinceReal < period * 0.6 ? 0 : sinceReal < 2500 ? 0.75 : 0.6;
+      // Music playing without a locked tempo: its own hits kick (below), the metronome stays faint.
+      else k = sinceHit < 1500 ? 0.12 : 0.35;
+      pulse.kick = Math.max(pulse.kick, k);
     }
-    pulse.kick *= Math.exp(-dt * 3.5);
+    // With no phones setting the rhythm, every bass hit in the music kicks the scene directly.
+    if (!manual && !real && audio.onsetEvents !== pulse.seenOnsets) {
+      pulse.kick = Math.min(1.5, Math.max(pulse.kick, 0.35 + 0.5 * audio.onsetRaw));
+    }
+    pulse.seenOnsets = audio.onsetEvents;
+    pulse.kick *= Math.exp(-dt * 4);
     // Every effect reads `beat`, so it is the one place beats are smoothed: it swells into each
     // kick over ~60 ms instead of jumping in one frame, then fades with it.
     const target = pulse.kick * ctl.intensity;
@@ -573,11 +588,15 @@
     pulse.wave = clamp((Math.max(swell, echo) * (0.45 + 0.55 * pulse.strength) * ctl.intensity + 0.4 * pulse.beat), 0, 1);
     pulse.breath = Math.sin((pulse.phase / 4) * TAU) * ctl.breath;
 
-    // Dancers heat the room up: the harder they move, the wilder every mode gets.
-    pulse.motion += (pulse.targetMotion - pulse.motion) * lerpK(dt, 0.5);
+    // Dancers heat the room up: the harder they move, the wilder every mode gets. Rises quickly
+    // (a burst of dancing shows within a beat), cools off more gently.
+    pulse.motion += (pulse.targetMotion - pulse.motion) * lerpK(dt, pulse.targetMotion > pulse.motion ? 0.15 : 0.6);
     // 50 BPM is calm, 170 is flat out, so dance tempos (120-130) sit in the middle with room to go.
     const heat = clamp((pulse.bpm - 50) / 120, 0, 1) * (0.4 + 0.6 * pulse.strength);
-    pulse.energy += (clamp(heat + 0.25 * pulse.beat + 0.7 * pulse.motion + ctl.heat, 0, 1) - pulse.energy) * lerpK(dt, 0.6);
+    // With no phones, the music's loudness heats the room too, so a drop is felt in the motion.
+    const sound = real || manual ? 0 : 0.45 * audio.level;
+    const heatGoal = clamp(heat + 0.3 * pulse.beat + 0.8 * pulse.motion + sound + ctl.heat, 0, 1);
+    pulse.energy += (heatGoal - pulse.energy) * lerpK(dt, heatGoal > pulse.energy ? 0.25 : 0.7);
   }
 
   // ======================================================================== audio FFT
@@ -596,11 +615,28 @@
     onset: 0,        // smoothed bass-hit envelope (what effects read)
     onsetRaw: 0,     // the detector's own spike
     onsetEvents: 0,
-    peak: 0.25,
-    prevBass: 0,
+    lastOnsetMs: -1e9,
+    // Per-band adaptive range [floor, ceiling]: each band is stretched over the span it actually
+    // moves in, so a track's dynamics reach the visuals instead of sitting near a constant.
+    range: { bass: [0, 0.1], mid: [0, 0.1], treble: [0, 0.1] },
+    prevBins: new Float32Array(FFT_BINS),
+    fluxMean: 0,     // running mean / mean deviation of bass flux: the hit threshold adapts to the track
+    fluxDev: 0.02,
+    // Treble hits (hi-hats, snares, claps), detected like the bass hits but over 2-11 kHz. They
+    // come several per beat, so they only drive small, short effects ("sparks"), never the beat.
+    spark: 0,        // smoothed flash envelope (what effects read)
+    sparkRaw: 0,
+    sparkEvents: 0,
+    lastSparkMs: -1e9,
+    sFluxMean: 0,
+    sFluxDev: 0.02,
     bandRanges: null,
     mode: 'off',
   };
+  const AUDIO_ATTACK_S = 0.025; // band envelopes jump up this fast...
+  const AUDIO_RELEASE_S = 0.14; // ...and let go this fast
+  const ONSET_GAP_MS = 110;     // two bass hits can't be closer than this (~16th notes at 136 BPM)
+  const SPARK_GAP_MS = 70;      // treble hits can come faster (hi-hat rolls)
 
 
   function ensureAudioContext() {
@@ -615,7 +651,7 @@
   function makeAnalyser() {
     const analyser = audio.ctx.createAnalyser();
     analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.6;
+    analyser.smoothingTimeConstant = 0.3; // low, so hits aren't smeared before we see them
     analyser.minDecibels = -90;
     analyser.maxDecibels = -15;
     return analyser;
@@ -682,8 +718,23 @@
     return ranges;
   }
 
-  function updateAudio(dt) {
+  /**
+   * Maps a band's raw level onto 0..1 over the range it has recently moved in. The ceiling jumps to
+   * new peaks and sinks over a few seconds; the floor drops to troughs at once and creeps up slowly.
+   * A share of the plain (ceiling-relative) level is kept so a loud, steady passage still reads loud.
+   */
+  function normBand(r, x, dt) {
+    r[1] = Math.max(x, r[1] * Math.exp(-dt / 4), 0.1);
+    r[0] = x < r[0] ? x : r[0] + (x - r[0]) * lerpK(dt, 2.5);
+    const span = Math.max(0.15, r[1] - r[0]); // below this it's noise: don't stretch it into jitter
+    const dyn = clamp((x - r[0]) / span, 0, 1);
+    return 0.3 * (x / r[1]) + 0.7 * dyn;
+  }
+
+  function updateAudio(dt, nowMs) {
     let bass = 0, mid = 0, treble = 0, nb = 0, nm = 0, nt = 0;
+    let flux = 0;  // how much the bass bins rose since last frame (spectral flux)
+    let sflux = 0; // the same over the treble bins
     const analyser = audio.analyser;
     if (analyser) {
       analyser.getByteFrequencyData(audio.freq);
@@ -693,37 +744,63 @@
         for (let k = b0; k < b1; k++) if (audio.freq[k] > m) m = audio.freq[k];
         audio.bins[i] = m;
         const v = m / 255;
-        if (f0 < 160) { bass += v; nb++; }
-        else if (f0 < 2000) { mid += v; nm++; }
-        else if (f0 < 11000) { treble += v; nt++; }
+        if (f0 < 160) {
+          bass += v; nb++;
+          flux += Math.max(0, v - audio.prevBins[i]);
+        } else if (f0 < 2000) { mid += v; nm++; }
+        else if (f0 < 11000) {
+          treble += v; nt++;
+          sflux += Math.max(0, v - audio.prevBins[i]);
+        }
+        audio.prevBins[i] = v;
       }
       bass /= nb || 1;
       mid /= nm || 1;
       treble /= nt || 1;
+      flux /= nb || 1;
+      sflux /= nt || 1;
     } else {
       audio.bins.fill(0);
+      audio.prevBins.fill(0);
     }
 
-    // Slow automatic gain so quiet and loud tracks both drive the visuals fully.
-    const raw = Math.max(bass, mid, treble);
-    audio.peak = Math.max(raw, audio.peak * Math.exp(-dt / 6), 0.08);
-    const g = ctl.audio / audio.peak; // the audio-reactivity control scales everything, including onsets
-    const k = lerpK(dt, 0.08);
-    audio.bass += (clamp(bass * g, 0, 1) - audio.bass) * k;
-    audio.mid += (clamp(mid * g, 0, 1) - audio.mid) * k;
-    audio.treble += (clamp(treble * g, 0, 1) - audio.treble) * k;
+    // Fast attack, short release, so each hit and each drop shows up right away.
+    const g = ctl.audio; // the audio-reactivity control scales everything, including hits
+    const env = (cur, target) => cur + (target - cur) * lerpK(dt, target > cur ? AUDIO_ATTACK_S : AUDIO_RELEASE_S);
+    audio.bass = env(audio.bass, clamp(normBand(audio.range.bass, bass, dt) * g, 0, 1));
+    audio.mid = env(audio.mid, clamp(normBand(audio.range.mid, mid, dt) * g, 0, 1));
+    audio.treble = env(audio.treble, clamp(normBand(audio.range.treble, treble, dt) * g, 0, 1));
     audio.level = (audio.bass + audio.mid + audio.treble) / 3;
 
-    const rawBass = clamp(bass * g, 0, 1);
-    const flux = rawBass - audio.prevBass;
-    audio.prevBass = rawBass;
-    if (flux > 0.18 && audio.onsetRaw < 0.5) {
-      audio.onsetRaw = 1;
+    // Bass hits: flux well above what this track usually does (adaptive threshold), so quiet and
+    // loud songs, sparse and busy ones, all register their kicks. Flux is per 60 Hz frame.
+    const f = flux / clamp(dt * 60, 0.25, 4);
+    const thresh = audio.fluxMean + 2.2 * audio.fluxDev + 0.015 / Math.max(0.3, g);
+    if (analyser && f > thresh && nowMs - audio.lastOnsetMs > ONSET_GAP_MS) {
+      audio.lastOnsetMs = nowMs;
       audio.onsetEvents++;
+      // Harder hits (further above the threshold) flash harder.
+      audio.onsetRaw = Math.max(audio.onsetRaw, clamp((0.6 + (f - thresh) / Math.max(thresh, 0.01)) * g, 0, 1.4));
     }
-    audio.onsetRaw *= Math.exp(-dt * 6);
-    // What effects see: swells into each hit instead of jumping, like the beat.
-    audio.onset += (audio.onsetRaw - audio.onset) * lerpK(dt, audio.onsetRaw > audio.onset ? 0.04 : 0.05);
+    const kf = lerpK(dt, 1.2);
+    audio.fluxMean += (f - audio.fluxMean) * kf;
+    audio.fluxDev += (Math.abs(f - audio.fluxMean) - audio.fluxDev) * kf;
+    audio.onsetRaw *= Math.exp(-dt * 7);
+    // What effects see: swells into each hit over ~20 ms instead of jumping, then fades with it.
+    audio.onset += (audio.onsetRaw - audio.onset) * lerpK(dt, audio.onsetRaw > audio.onset ? 0.02 : 0.05);
+
+    // Treble hits: same adaptive test, own statistics (cymbal hiss sets a higher floor than bass).
+    const sf = sflux / clamp(dt * 60, 0.25, 4);
+    const sThresh = audio.sFluxMean + 2.5 * audio.sFluxDev + 0.012 / Math.max(0.3, g);
+    if (analyser && sf > sThresh && nowMs - audio.lastSparkMs > SPARK_GAP_MS) {
+      audio.lastSparkMs = nowMs;
+      audio.sparkEvents++;
+      audio.sparkRaw = Math.max(audio.sparkRaw, clamp((0.5 + (sf - sThresh) / Math.max(sThresh, 0.01)) * g, 0, 1));
+    }
+    audio.sFluxMean += (sf - audio.sFluxMean) * kf;
+    audio.sFluxDev += (Math.abs(sf - audio.sFluxMean) - audio.sFluxDev) * kf;
+    audio.sparkRaw *= Math.exp(-dt * 14); // gone in ~0.15 s, so a hi-hat pattern glitters instead of strobing
+    audio.spark += (audio.sparkRaw - audio.spark) * lerpK(dt, audio.sparkRaw > audio.spark ? 0.012 : 0.03);
   }
 
   /** Only problems are shown; while audio flows, the spectrum says enough. */
@@ -901,6 +978,7 @@
     'fluid-advect', 'fluid-curl', 'fluid-vorticity', 'fluid-divergence', 'fluid-pressure',
     'fluid-gradient', 'fluid-splat', 'fluid-scale', 'fluid-display',
     'fx-pre', 'fx-feedback', 'fx-bright', 'fx-blur', 'fx-final', 'fractal3d',
+    'star-iris', 'nebula-portals',
   ];
 
   async function loadText(path) {
@@ -968,7 +1046,7 @@
     drv.level = lerp(audio.level, clamp(0.4 * pulse.energy * ph + 0.6 * hWave, 0, 1));
     drv.onset = lerp(audio.onset, hBeat);
     // The colour source also turns the whole palette: sound hits normally, phone beats when swapped.
-    const sndHue = 0.06 * audio.level + 0.35 * audio.onset;
+    const sndHue = 0.06 * audio.level + 0.35 * audio.onset + 0.2 * audio.spark; // hi-hats flicker the hue a little
     const beatHue = 0.3 * hWave + 0.15 * pulse.motion;
     drv.hue = (drv.hue + dt * lerp(sndHue, beatHue)) % 1;
     const beats = pulse.beatEvents - drv.seenBeats;
@@ -1089,6 +1167,7 @@
       aspect: 0,
       lastBeat: 0,
       lastOnset: 0,
+      lastSpark: 0,
       shove: 0, // beat push still to deliver
       spin: 0,
       hue: Math.random(),
@@ -1177,6 +1256,16 @@
           const a = Math.random() * TAU;
           const f = 100 + 230 * drv.bass;
           this.splat(v, x, y, [Math.cos(a) * f, Math.sin(a) * f, 0], 0.003);
+        }
+        // Treble hits: a few tiny bright droplets, no push, so hi-hats glitter on top of the flow.
+        const sparks = audio.sparkEvents - this.lastSpark;
+        this.lastSpark = audio.sparkEvents;
+        if (sparks > 0) {
+          for (let i = 0; i < 3; i++) {
+            const x = 0.1 + Math.random() * 0.8;
+            const y = 0.1 + Math.random() * 0.8;
+            this.splat(this.dye, x, y, hsv((this.hue + 0.5 + Math.random() * 0.2) % 1, 0.6, 0.35 + 0.4 * audio.sparkRaw), 0.0006);
+          }
         }
         if (this.inject) this.inject(dt);
         touchFluid(this, dt);
@@ -1484,7 +1573,46 @@
       },
     };
 
-    return [warp, rd, fluid, julia, mandel, juliaFluid, flight];
+    // ---- Star Iris: a vast eye of stardust in the night sky above a pine forest.
+    const starIris = {
+      id: 'iris',
+      label: 'Star Iris',
+      spin: 0,
+      update(dt) {
+        // Pulse = the iris slowly turning; beats nudge it round.
+        this.spin += dt * (0.01 + 0.05 * drv.energy + 0.08 * drv.beat);
+      },
+      render(target, U) {
+        draw(P['star-iris'], { ...U, uSpin: this.spin }, target);
+      },
+    };
+
+    // ---- Nebula Portals: an oil-slick nebula spiralling into dark portals above a liquid horizon.
+    const portals = {
+      id: 'portals',
+      label: 'Nebula Portals',
+      flow: 0,
+      hue: 0.1,
+      swirl: 1.2,
+      update(dt) {
+        this.flow += dt * (0.3 + 0.9 * drv.energy + 0.8 * drv.beat);
+        this.hue += dt * (0.015 + 0.1 * drv.mid);
+        // Energy winds the spiral tighter; eased so the shape changes over seconds, not frames.
+        this.swirl += (1.0 + 1.2 * drv.energy - this.swirl) * lerpK(dt, 1.5);
+      },
+      render(target, U) {
+        const s = 0.35 + 0.65 * pulse.strength;
+        draw(P['nebula-portals'], {
+          ...U,
+          uFlow: this.flow,
+          uHue: this.hue,
+          uPortal: 1 + 0.08 * drv.breath * s + 0.08 * drv.beat,
+          uSwirl: this.swirl,
+        }, target);
+      },
+    };
+
+    return [warp, rd, fluid, julia, mandel, juliaFluid, flight, starIris, portals];
   }
 
   // ======================================================================== render loop
@@ -1616,7 +1744,7 @@
         uBursts: burstData,
         uWarp: ctl.warp,
         uPunch: ctl.punch * drv.beat * 0.12 + 0.09 * drv.thump, // bass thump zooms in when swapped
-        uSplit: ctl.glitch * (0.012 * drv.beat + 0.02 * drv.onset),
+        uSplit: ctl.glitch * (0.012 * drv.beat + 0.02 * drv.onset + 0.008 * audio.spark),
         uSmudgeCount: smudgeCount,
         uSmudges: smudgeData,
         uSmudgeAge: smudgeAge,
@@ -1747,7 +1875,7 @@
     if (rawDt < 0.25) adaptQuality(dt, now); // ignore stalls (background tab, GC)
     updateControls(dt);
     updatePulse(dt, now);
-    updateAudio(dt);
+    updateAudio(dt, now);
     updateDrive(dt);
     // Animation time runs at the speed control's rate; the heartbeat itself keeps real time.
     // Swapped, every bass hit also surges the animation forward (up to ~3x for a moment).
@@ -1772,6 +1900,7 @@
       uTreble: drv.treble,
       uLevel: drv.level,
       uOnset: drv.onset,
+      uSpark: audio.spark, // treble hits are detail, so they come from the sound in either routing
       uFFT: fftTex,
     };
 

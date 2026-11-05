@@ -24,7 +24,8 @@ uniform float uBass;
 uniform float uMid;
 uniform float uTreble;
 uniform float uLevel;
-uniform float uOnset;     // decaying impulse on bass onsets
+uniform float uOnset;     // decaying impulse on bass onsets (kicks): big moves
+uniform float uSpark;     // short flash on treble hits (hi-hats, snares, claps): small, fast detail
 uniform sampler2D uFFT;   // 64 log-spaced bins in .r, 0..1
 
 const float PI = 3.14159265359;

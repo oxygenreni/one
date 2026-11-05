@@ -64,7 +64,7 @@
   // ---------------------------------------------------------------- shared animation controls
   // Everyone shares one set of controls (latest change wins). Ranges mirror ANIM_DEFS in server.js,
   // which clamps them anyway.
-  const MODES = ['Domain Warp', 'Reaction-Diffusion', 'Fluid Tracers', 'Julia Set', 'Mandelbrot', 'Julia Fluid', 'Fractal Flight'];
+  const MODES = ['Domain Warp', 'Reaction-Diffusion', 'Fluid Tracers', 'Julia Set', 'Mandelbrot', 'Julia Fluid', 'Fractal Flight', 'Star Iris', 'Nebula Portals'];
   const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple'], ['hearts', 'Hearts'], ['invert', 'Invert'], ['swap', 'Music → Motion']];
   const pct = (v) => `${Math.round(v * 100)}%`;
   const SLIDERS = [
@@ -670,7 +670,9 @@
     const t = performance.now();
     const dt = Math.min(0.1, Math.max(0.001, (t - (lastMotionT || t)) / 1000));
     lastMotionT = t;
-    danceEnergy += (Math.min(1, mag / 12) - danceEnergy) * (1 - Math.exp(-dt / 0.4));
+    // Quick to rise (the display already smooths it), slower to fall so it doesn't flicker between moves.
+    const moveNow = Math.min(1, mag / 12);
+    danceEnergy += (moveNow - danceEnergy) * (1 - Math.exp(-dt / (moveNow > danceEnergy ? 0.12 : 0.4)));
     motionAvg += (mag - motionAvg) * (1 - Math.exp(-dt / 1.5));
     const threshold = Math.max(JOLT_MIN, motionAvg * JOLT_RATIO);
     if (mag > threshold && lastMag <= threshold && t - lastJolt > JOLT_REFRACTORY_MS) {

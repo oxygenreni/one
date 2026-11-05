@@ -37,7 +37,7 @@ void main() {
 
   vec3 col = mix(earth, glow, smoothstep(0.35, 0.95, length(q) + 0.25 * f));
   col *= 0.55 + 0.9 * f01 * f01;
-  col += glow * gills * (0.6 + uTreble);
+  col += glow * gills * (0.6 + uTreble + 0.8 * uSpark);
 
   // Veins of light along the warp field's steepest lines.
   float veins = smoothstep(0.03, 0.0, abs(r.x - r.y) - 0.01 * uBass);
@@ -48,8 +48,9 @@ void main() {
   vec2 cell = floor(sp);
   vec2 o = hash22(cell);
   float d = length(fract(sp) - o);
-  float spark = smoothstep(0.08, 0.0, d) * step(0.82, hash12(cell + 3.1));
-  col += spark * (0.4 + 2.5 * uTreble) * vec3(0.7, 1.0, 0.85);
+  // Each treble hit lights up extra spores for a moment.
+  float spark = smoothstep(0.08, 0.0, d) * step(0.82 - 0.14 * uSpark, hash12(cell + 3.1));
+  col += spark * (0.4 + 2.5 * uTreble + 3.0 * uSpark) * vec3(0.7, 1.0, 0.85);
 
   col *= 1.0 + 0.35 * uPulse * uStrength;
   float vig = smoothstep(1.9, 0.4, length(aspectUv()));

@@ -47,14 +47,14 @@ void main() {
 
     float contrast = 1.0 + 2.2 * uBass + 0.8 * uOnset;
     col = base * (0.25 + diff * (0.6 + 1.6 * uBass));
-    col += spec * (0.3 + 2.5 * uTreble) * vec3(1.0, 0.95, 0.9);
+    col += spec * (0.3 + 2.5 * uTreble + 3.0 * uSpark) * vec3(1.0, 0.95, 0.9);
     col = pow(col, vec3(contrast * 0.8));
     // Fade the far exterior to black so the set's structure carries the contrast.
     col *= 0.12 + 0.88 * smoothstep(2.0, 14.0, sn);
 
     // Bright filament along the set's boundary.
     float rim = smoothstep(px * 6.0, 0.0, de);
-    col += rim * palette(uHue + 0.5, vec3(0.6), vec3(0.4), vec3(1.0), vec3(0.3, 0.2, 0.2)) * (0.5 + 1.5 * uLevel);
+    col += rim * palette(uHue + 0.5, vec3(0.6), vec3(0.4), vec3(1.0), vec3(0.3, 0.2, 0.2)) * (0.5 + 1.5 * uLevel + 1.2 * uSpark);
   }
 
   col *= smoothstep(2.4, 0.5, length(aspectUv()));

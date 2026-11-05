@@ -84,7 +84,7 @@ void main() {
   // brightest channel (instead of letting it clip to white) so its colour bands stay visible.
   jc /= max(1.0, max(jc.r, max(jc.g, jc.b)) * 0.8);
   vec3 col = mix(dye * 0.7, jc * 1.1, mask * 0.85);
-  col += line * vec3(1.0, 0.97, 0.92) * (0.6 + 0.8 * uTreble);
+  col += line * vec3(1.0, 0.97, 0.92) * (0.6 + 0.8 * uTreble + 1.2 * uSpark);
   // Chromatic shimmer where the flow is fast.
   col += 0.0006 * length(vel) * vec3(0.4, 0.2, 0.8) * (0.5 + uTreble);
   col *= 1.0 + 0.25 * uBeat;

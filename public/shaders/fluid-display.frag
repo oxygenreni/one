@@ -14,7 +14,7 @@ void main() {
 
   vec3 col = c * shade;
   // Chromatic fringe on fast gradients mimics retinal after-images.
-  col += 0.25 * vec3(abs(lx), abs(ly), abs(lx + ly)) * (0.5 + uTreble);
+  col += 0.25 * vec3(abs(lx), abs(ly), abs(lx + ly)) * (0.5 + uTreble + 1.5 * uSpark);
   col += 0.03 * l * vec3(0.6, 0.3, 1.0) * uPulse * uStrength;
   col *= smoothstep(2.6, 0.6, length(aspectUv()));
   fragColor = vec4(tonemap(col), 1.0);

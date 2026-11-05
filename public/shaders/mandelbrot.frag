@@ -51,6 +51,8 @@ void main() {
     float stripes = 0.5 + 0.5 * sin(muc * 1.3 - uTime * 2.0);
     col = base * (0.3 + 1.8 * bin) * (0.75 + 0.25 * stripes);
     col += pow(bin, 3.0) * uOnset * vec3(1.0, 0.9, 1.0);
+    // Treble hits flash the stripes.
+    col += base * 0.4 * uSpark * stripes * stripes;
     // Glow on the fast-escaping side of the boundary.
     col += vec3(0.9, 0.6, 1.0) * min(exp(-(mu - uMuRef) * 0.03), 1.0) * 0.15 * (1.0 + uBass);
   }
