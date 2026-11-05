@@ -688,6 +688,9 @@ function loadOrCreateCert() {
 
 function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
   let publicUrl = null;
+  // On a host such as Render, the public address is the only one phones can reach.
+  // Render sets RENDER_EXTERNAL_URL itself; PUBLIC_URL overrides it (e.g. a custom domain).
+  const hostedUrl = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
   const build = computeBuildId();
   const pin = /^\d{4,12}$/.test(String(hostPin || '')) ? String(hostPin) : String(crypto.randomInt(100000, 1000000));
   let pinFailures = [];
@@ -725,6 +728,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
   });
 
   function inputUrls(req) {
+    if (hostedUrl) return [`${hostedUrl}/input.html`];
     const port = req.socket.localPort;
     const proto = useHttps ? 'https' : 'http';
     const hosts = lanAddresses();
