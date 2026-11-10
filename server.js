@@ -76,6 +76,20 @@ function canChange(key, host, lock) {
   return lock === 'limited' && SLIDER_KEYS.has(key);
 }
 
+/**
+ * Phone modules the host can share. Guest phones only get the join options and the touch pad;
+ * the host ticks a module to hand it to every phone. Displays are not affected.
+ */
+const SHARE_MODULES = ['visual', 'fx', 'sliders', 'games'];
+const MODULE_OF = { mode: 'visual', kaleido: 'fx', echo: 'fx', bloom: 'fx', ripple: 'fx', invert: 'fx', swap: 'fx' };
+for (const k of SLIDER_KEYS) MODULE_OF[k] = 'sliders';
+
+/** May a guest phone change `key`? Keys outside every module (e.g. `heartbeat`) stay with the host. */
+function phoneMayChange(key, share) {
+  const m = MODULE_OF[key];
+  return !!(m && share[m]);
+}
+
 /** Direct connection from this machine (not through the tunnel or another proxy). */
 function isDirectLocal(address, headers) {
   const loopback = address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -401,6 +415,7 @@ class AnimationControls {
     this.version = 0;
     this.values = {};
     this.lock = 'open'; // not part of reset: only a host changes it
+    this.share = Object.fromEntries(SHARE_MODULES.map((m) => [m, false])); // same
     this.reset();
     // Until someone changes a control, the first display to connect may seed mode/FX from its saved choice.
     this.touched = false;
@@ -449,20 +464,32 @@ class AnimationControls {
     return true;
   }
 
-  /** Keeps only the keys this client may change. */
-  filter(patch, host) {
+  setShare(patch) {
+    if (!patch || typeof patch !== 'object') return false;
+    let changed = false;
+    for (const m of SHARE_MODULES) {
+      if (typeof patch[m] !== 'boolean' || patch[m] === this.share[m]) continue;
+      this.share[m] = patch[m];
+      changed = true;
+    }
+    if (changed) this.version++;
+    return changed;
+  }
+
+  /** Keeps only the keys this client may change. `phone` = a guest phone, limited to shared modules. */
+  filter(patch, host, phone = false) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { allowed: null, rejected: false };
     const allowed = {};
     let rejected = false;
     for (const k of Object.keys(patch)) {
-      if (canChange(k, host, this.lock)) allowed[k] = patch[k];
+      if (canChange(k, host, this.lock) && (host || !phone || phoneMayChange(k, this.share))) allowed[k] = patch[k];
       else rejected = true;
     }
     return { allowed, rejected };
   }
 
   snapshot() {
-    return { ...this.values, lock: this.lock, version: this.version };
+    return { ...this.values, lock: this.lock, share: { ...this.share }, version: this.version };
   }
 }
 
@@ -867,6 +894,8 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
     let host = isDirectLocal(socket.handshake.address, socket.handshake.headers);
     const sendHostStatus = () => socket.emit('host:status', { host, pin: host ? pin : undefined });
     const mediaAllowed = () => host || anim.lock === 'open';
+    // Guest phones may run games only when the host shares them.
+    const gamesAllowed = () => host || (mediaAllowed() && (role !== 'input' || anim.share.games));
 
     socket.emit('server:info', { build });
 
@@ -908,6 +937,12 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
     socket.on('host:lock', (level) => {
       if (!host) return;
       if (anim.setLock(level)) animDirty = true;
+    });
+
+    // Sharing a module reaches every phone straight away, not on the next broadcast tick.
+    socket.on('host:share', (patch) => {
+      if (!host) return;
+      if (anim.setShare(patch)) io.emit('controls:state', anim.snapshot());
     });
 
     socket.on('time:ping', (_t0, ack) => {
@@ -994,14 +1029,14 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       const t = Date.now();
       if (!role || t - lastAnim < ANIM_MIN_INTERVAL_MS) return;
       lastAnim = t;
-      const { allowed, rejected } = anim.filter(patch, host);
+      const { allowed, rejected } = anim.filter(patch, host, role === 'input');
       if (allowed && anim.set(allowed)) animDirty = true;
       if (rejected) socket.emit('controls:state', { ...anim.snapshot(), force: true });
     });
 
     socket.on('controls:reset', () => {
       const t = Date.now();
-      if (!role || !mediaAllowed() || t - lastControl < CONTROL_COOLDOWN_MS) return;
+      if (!role || !mediaAllowed() || (role === 'input' && !host) || t - lastControl < CONTROL_COOLDOWN_MS) return;
       lastControl = t;
       anim.reset();
       animDirty = true;
@@ -1063,7 +1098,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
     socket.on('game:start', (kind, ack) => {
       const reply = typeof ack === 'function' ? ack : () => {};
       const t = Date.now();
-      if (!role || !mediaAllowed()) return reply({ ok: false, error: 'The host has locked the controls.' });
+      if (!role || !gamesAllowed()) return reply({ ok: false, error: 'Only the host can start games.' });
       if (t - lastGame < GAME_START_COOLDOWN_MS) return reply({ ok: false, error: 'Wait a moment.' });
       if (game) return reply({ ok: false, error: 'A game is already running.' });
       const players = [...phones.values()];
@@ -1076,7 +1111,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
     });
 
     socket.on('game:stop', () => {
-      if (!role || !mediaAllowed() || !game) return;
+      if (!role || !gamesAllowed() || !game) return;
       game = null;
       io.emit('game:state', { kind: null });
     });
@@ -1247,5 +1282,5 @@ if (require.main === module) main();
 
 module.exports = {
   createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, CrowdHold, TapRace, PassColour,
-  ANIM_DEFS, canChange,
+  ANIM_DEFS, canChange, phoneMayChange,
 };

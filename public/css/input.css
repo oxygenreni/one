@@ -165,7 +165,7 @@ main {
 .chip.active::after { content: ""; position: absolute; left: -1px; right: -1px; bottom: -1px; height: 2px;
   background: var(--rgb); background-size: var(--span-w, 100%) 100%; background-position: var(--span-x, 0) 0; }
 
-.sliders { display: grid; gap: 16px; margin: 18px 0 6px; }
+.sliders { display: grid; gap: 16px; margin: 6px 0 6px; }
 .slider label { display: flex; justify-content: space-between; gap: 8px; font-size: .9rem; }
 .slider output { color: var(--cream); font-weight: 500; font-size: .8rem; font-variant-numeric: tabular-nums; }
 .slider .hint { display: block; color: var(--muted); font-weight: 300; font-size: .76rem; margin-top: 2px; }
@@ -175,6 +175,11 @@ main {
 
 .host-row { position: relative; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .host-row .label { color: var(--muted); font-family: var(--sans); font-weight: 300; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; margin-right: 4px; }
+.module-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.head-actions { display: flex; align-items: center; gap: 10px; }
+.share { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0; color: var(--muted); font-size: .8rem; cursor: pointer; }
+.share input { width: 18px; height: 18px; margin: 0; accent-color: var(--cream); cursor: pointer; }
+.share:has(input:checked) { color: var(--fg); }
 .host-card { display: flex; justify-content: center; }
 .host-card .btn { width: 100%; }
 .link-btn {

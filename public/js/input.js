@@ -188,8 +188,30 @@
   const SLIDER_KEYS = new Set(SLIDERS.map((d) => d.key));
   const LOCKS = [['open', 'Open'], ['limited', 'Sliders only'], ['locked', 'Locked']];
   const lockLevel = () => anim.lock || 'open';
-  const can = (key) => isHost || lockLevel() === 'open' || (lockLevel() === 'limited' && SLIDER_KEYS.has(key));
+  const lockAllows = (key) => lockLevel() === 'open' || (lockLevel() === 'limited' && SLIDER_KEYS.has(key));
   const fullControl = () => isHost || lockLevel() === 'open';
+  // ---- Host sharing (server.js -> SHARE_MODULES): a ticked module shows up on every phone at once.
+  const MODULE_OF = { mode: 'visual' };
+  for (const [id] of FX) MODULE_OF[id] = 'fx';
+  for (const k of SLIDER_KEYS) MODULE_OF[k] = 'sliders';
+  const shared = (m) => !!(anim.share && anim.share[m]);
+  const can = (key) => isHost || (shared(MODULE_OF[key]) && lockAllows(key));
+  const gamesAllowed = () => isHost || (shared('games') && lockLevel() === 'open');
+  document.querySelectorAll('[data-share]').forEach((box) => box.addEventListener('change', () => {
+    socket.emit('host:share', { [box.dataset.share]: box.checked });
+  }));
+
+  function renderShare() {
+    const anyAnim = ['visual', 'fx', 'sliders'].some(shared);
+    $('animCard').hidden = !isHost && !anyAnim;
+    document.querySelectorAll('#animCard .module').forEach((el) => (el.hidden = !isHost && !shared(el.dataset.module)));
+    document.querySelectorAll('[data-share]').forEach((box) => {
+      box.checked = shared(box.dataset.share);
+      box.closest('.share').hidden = !isHost;
+    });
+    $('animReset').hidden = !isHost;
+    $('hostCard').hidden = isHost;
+  }
 
   socket.on('host:status', (st) => {
     isHost = !!st.host;
@@ -200,9 +222,8 @@
   function renderHostRow() {
     const row = $('hostRow');
     row.textContent = '';
-    // Guests only get the join options and the touch pad; the host's PIN unlocks the rest on this phone.
-    $('animCard').hidden = !isHost;
-    $('hostCard').hidden = isHost;
+    // Guests get the join options, the touch pad and whatever the host shares; the PIN unlocks the rest.
+    renderShare();
     if (!isHost) return;
     const label = document.createElement('span');
     label.className = 'label';
@@ -240,6 +261,7 @@
       b.disabled = !can(FX[i][0]);
     });
     $('animReset').disabled = !fullControl();
+    renderShare();
     const now = performance.now();
     for (const k in sliderEls) {
       const e = sliderEls[k];
@@ -450,20 +472,20 @@
   function renderGame() {
     const s = game;
     const running = !!s.kind;
-    $('gamesCard').hidden = !isHost && !running;
-    $('gameGrid').hidden = !isHost;
+    $('gamesCard').hidden = !isHost && !running && !shared('games');
+    $('gameGrid').hidden = !isHost && !shared('games');
     $('gameGrid').querySelectorAll('[data-game]').forEach((b) => {
       b.classList.toggle('active', s.kind === b.dataset.game);
-      b.disabled = running || !fullControl();
+      b.disabled = running || !gamesAllowed();
     });
-    $('gameStop').hidden = !running || !isHost;
+    $('gameStop').hidden = !running || !gamesAllowed();
     const st = $('gameStatus');
     const card = st.closest('.card');
     st.style.color = '';
     card.classList.remove('has-colour');
     let text;
     if (!running) {
-      text = fullControl() ? 'Start a game for the whole room.' : 'The host has locked the games.';
+      text = gamesAllowed() ? 'Start a game for the whole room.' : 'The host has locked the games.';
     } else if (s.kind === 'race') {
       const team = s.teams[myN];
       const name = TEAM_NAMES[team];

@@ -69,7 +69,7 @@ The server holds one shared set of controls (`AnimationControls` in `server.js`)
 
 ### Host lock
 
-The display machine is the **host**: any page opened directly on the computer that runs the server, not through the tunnel. Anyone else becomes host by tapping **I'm the host** on the phone page and entering the **host PIN**. The server prints the PIN at startup, and the display shows it when you hover over its lock button. The PIN is random on each start; set `HOST_PIN=123456` to choose your own. Wrong guesses are limited to one every 2 s per connection and 20 a minute across the server.
+The display machine is the **host**: any page opened directly on the computer that runs the server, not through the tunnel. Anyone else becomes host by tapping **For host** on the phone page and entering the **host PIN**. Guest phones only show the join options and the touch pad. On a host phone, each module (Visual, Effects, Sliders, Games) has a **Share** tick that hands it to every phone straight away; the server rejects changes to modules that aren't shared. Displays are not affected. The server prints the PIN at startup, and the display shows it when you hover over its lock button. The PIN is random on each start; set `HOST_PIN=123456` to choose your own. Wrong guesses are limited to one every 2 s per connection and 20 a minute across the server.
 
 | Lock | What phones (non-hosts) can do |
 | --- | --- |

@@ -81,7 +81,10 @@
     <section id="gamesCard" class="card games" aria-labelledby="gamesTitle" hidden>
       <div class="anim-head">
         <h2 id="gamesTitle">Games</h2>
-        <button id="gameStop" class="btn small" type="button" hidden>Stop</button>
+        <div class="head-actions">
+          <label class="share" hidden><input type="checkbox" data-share="games"> Share</label>
+          <button id="gameStop" class="btn small" type="button" hidden>Stop</button>
+        </div>
       </div>
       <p id="gameStatus" class="status small">Start a game for the whole room.</p>
       <div id="gameGrid" class="chips" hidden>
@@ -98,11 +101,18 @@
       <p id="hbState" class="status small manual" hidden></p>
       <p id="lockState" class="status small manual" hidden></p>
       <div id="hostRow" class="host-row"></div>
-      <div class="field-label">Visual</div>
-      <div id="modeGrid" class="chips"></div>
-      <div class="field-label">Effects</div>
-      <div id="fxGrid" class="chips"></div>
-      <div id="sliders" class="sliders"></div>
+      <div class="module" data-module="visual">
+        <div class="module-head"><div class="field-label">Visual</div><label class="share" hidden><input type="checkbox" data-share="visual"> Share</label></div>
+        <div id="modeGrid" class="chips"></div>
+      </div>
+      <div class="module" data-module="fx">
+        <div class="module-head"><div class="field-label">Effects</div><label class="share" hidden><input type="checkbox" data-share="fx"> Share</label></div>
+        <div id="fxGrid" class="chips"></div>
+      </div>
+      <div class="module" data-module="sliders">
+        <div class="module-head"><div class="field-label">Sliders</div><label class="share" hidden><input type="checkbox" data-share="sliders"> Share</label></div>
+        <div id="sliders" class="sliders"></div>
+      </div>
     </section>
 
     <section id="hostCard" class="card host-card">

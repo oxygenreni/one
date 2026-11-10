@@ -11,7 +11,7 @@ const tmpUploads = fs.mkdtempSync(path.join(os.tmpdir(), 'pulse-uploads-'));
 process.env.UPLOAD_DIR = tmpUploads;
 const {
   createApp, parseYouTubeId, parseSpotify, PlaybackState, PulseAggregator, AnimationControls, TapCombos, CrowdHold, TapRace, PassColour,
-  ANIM_DEFS, canChange,
+  ANIM_DEFS, canChange, phoneMayChange,
 } = require('../server.js');
 
 test.after(() => fs.rmSync(tmpUploads, { recursive: true, force: true }));
@@ -241,6 +241,14 @@ test('socket flow: animation controls are shared between many participants', asy
   assert.equal(late.heartbeat, false);
 });
 
+test('phoneMayChange only allows shared modules', () => {
+  const share = { visual: false, fx: true, sliders: false, games: false };
+  assert.equal(phoneMayChange('bloom', share), true);
+  assert.equal(phoneMayChange('mode', share), false);
+  assert.equal(phoneMayChange('hue', share), false);
+  assert.equal(phoneMayChange('heartbeat', { visual: true, fx: true, sliders: true, games: true }), false, 'heartbeat stays with the host');
+});
+
 test('canChange follows the lock level', () => {
   assert.equal(canChange('mode', false, 'open'), true);
   assert.equal(canChange('mode', false, 'limited'), false);
@@ -289,6 +297,19 @@ test('socket flow: host lock, PIN, build info and per-phone colours', async (t) 
   const limited = nextState(phone.c, (s) => s.lock === 'limited');
   display.c.emit('host:lock', 'limited');
   await limited;
+
+  // Guest phones start with nothing shared: even a slider is rejected.
+  const unshared = nextState(phone.c, (s) => s.force === true);
+  phone.c.emit('controls:set', { hue: 0.3 });
+  assert.equal((await unshared).hue, 0);
+  await new Promise((r) => setTimeout(r, 120)); // controls:set rate limit
+
+  // Phones can't share; the host's tick reaches every phone at once.
+  phone.c.emit('host:share', { visual: true });
+  const sharedState = nextState(phone2.c, (s) => s.share && s.share.sliders === true);
+  display.c.emit('host:share', { sliders: true, bogus: true });
+  const sh = await sharedState;
+  assert.deepEqual(sh.share, { visual: false, fx: false, sliders: true, games: false });
 
   // Limited: sliders pass, mode is rejected and the sender gets the real state back.
   const rejected = nextState(phone.c, (s) => s.force === true);
@@ -554,6 +575,11 @@ test('socket flow: stir drags, hold together, tilt and games', async (t) => {
 
   const unknown = await new Promise((r) => display.emit('game:start', 'nope', r));
   assert.equal(unknown.ok, false);
+  const refused = await new Promise((r) => a.emit('game:start', 'race', r));
+  assert.equal(refused.ok, false, 'guest phones need games shared');
+  const sharing = next(a, 'controls:state', (s) => s.share && s.share.games);
+  display.emit('host:share', { games: true });
+  await sharing;
   const started = next(b, 'game:state', (s) => s.kind === 'race');
   const res = await new Promise((r) => a.emit('game:start', 'race', r));
   assert.equal(res.ok, true);
