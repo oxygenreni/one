@@ -22,7 +22,7 @@ npm run start:https    # https://<LAN-IP>:8443 with a self-signed certificate
 Chrome on Android often fails on self-signed certificates with `ERR_TOO_MANY_RETRIES` (Chromium issue 40418163). Use the tunnel for parties rather than `start:https`. With `start:https`, the server generates a self-signed certificate in `.cert/` the first time it runs, and each phone has to accept the browser warning once. You can supply your own certificate with `SSL_KEY=… SSL_CERT=…`. Set `PORT` to change the port.
 
 1. Open `/output.html` on the computer that drives the projector or speakers. Click **Start display**. When Chrome asks what to share, choose **Entire screen** and tick **Also share system audio**, then click **Hide** on the sharing bar. If you skip it, click the spectrum in the top-right later. Play the music from any app on that computer (Spotify, YouTube in another tab, anything); the visuals hear it through the shared system audio.
-2. Phones scan the QR code on the main page (`/`) or the display's start screen, or open `/input.html` directly. They pick how to join: **Tap** along to the music, **Dance** with the phone, or the experimental **Heart camera**.
+2. Phones scan the QR code on the main page (`/`) or the display's start screen, or open `/input.html` directly. They pick how to join: the experimental **Heart camera** (the default), **Tap** along to the music, or **Dance** with the phone.
 
 To try it without phones, run `npm run simulate -- http://localhost:3000 25`. This starts 25 fake heartbeats. `npm test` runs the unit tests and a socket test with 30 clients.
 
@@ -37,7 +37,7 @@ To try it without phones, run `npm run simulate -- http://localhost:3000 25`. Th
 | `←` `→` | Cycle modes |
 | `H` | Hide the UI (it also hides itself after 3.5 s without mouse movement) |
 | `F` | Fullscreen |
-| `Q` | Show/hide a QR code in the corner that phones can scan to join |
+| `Q` / **Show QR** | Show/hide a QR code in the corner that phones can scan to join |
 
 ## Joining from a phone
 
@@ -69,7 +69,7 @@ The server holds one shared set of controls (`AnimationControls` in `server.js`)
 
 ### Host lock
 
-The display machine is the **host**: any page opened directly on the computer that runs the server, not through the tunnel. Anyone else becomes host by tapping **For host** on the phone page and entering the **host PIN**. Guest phones only show the join options and the touch pad. On a host phone, each module (Visual, Effects, Sliders, Games) has a **Share** tick that hands it to every phone straight away; the server rejects changes to modules that aren't shared. Displays are not affected. The server prints the PIN at startup, and the display shows it when you hover over its lock button. The PIN is random on each start; set `HOST_PIN=123456` to choose your own. Wrong guesses are limited to one every 2 s per connection and 20 a minute across the server.
+The display machine is the **host**: any page opened directly on the computer that runs the server, not through the tunnel. Anyone else becomes host by tapping **For host** on the phone page and entering the **host PIN**. Guest phones only show the join options and the touch pad. On a host phone, each module (Visual, Effects, Sliders, Games, Touch pad) has a **Share** tick (only the touch pad starts shared) that hands it to every phone straight away; the server rejects changes to modules that aren't shared. Displays are not affected. The server prints the PIN at startup, and the display shows it when you hover over its lock button. The PIN is random on each start; set `HOST_PIN=123456` to choose your own. Wrong guesses are limited to one every 2 s per connection and 20 a minute across the server.
 
 | Lock | What phones (non-hosts) can do |
 | --- | --- |

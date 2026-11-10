@@ -42,9 +42,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--cream); out
 
 .muted { color: var(--muted); font-weight: 300; }
 .mono { font-family: var(--mono); }
-.eyebrow { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--muted);
-  font-family: var(--sans); font-weight: 300; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
-.signal { width: 5px; height: 5px; flex-shrink: 0; border-radius: 50%; background: var(--cream); box-shadow: 0 0 12px rgb(255 255 227 / 30%); }
 [hidden] { display: none !important; }
 
 .btn {
@@ -75,7 +72,6 @@ input:focus { border-color: var(--cream); outline: none; }
 .start-card h1 { margin: 0; font: 700 clamp(64px, 8vw, 96px)/.92 var(--display); letter-spacing: -.015em; text-transform: uppercase; }
 .start-card h1 span { color: var(--slate); }
 .start-card p { margin: 0; }
-.start-card .lead { color: #cbcbcb; font-weight: 300; line-height: 1.8; }
 .start-card b { color: var(--fg); font-weight: 500; }
 .field { display: grid; gap: 6px; color: var(--muted); }
 .hint { color: var(--muted); font-weight: 300; font-size: 12px; line-height: 1.7; }
@@ -86,6 +82,7 @@ input:focus { border-color: var(--cream); outline: none; }
   padding: 12px; background: var(--glass); border: 1px solid var(--line);
   font-family: var(--sans); font-weight: 300; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--cream); }
 .qr-corner .qr { width: 150px; height: 150px; }
+.qr-corner .qr-url { max-width: 170px; font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--muted); text-align: center; overflow-wrap: anywhere; }
 
 .ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; transition: opacity .6s; }
 .ui > * { pointer-events: auto; }

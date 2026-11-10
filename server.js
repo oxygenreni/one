@@ -80,7 +80,8 @@ function canChange(key, host, lock) {
  * Phone modules the host can share. Guest phones only get the join options and the touch pad;
  * the host ticks a module to hand it to every phone. Displays are not affected.
  */
-const SHARE_MODULES = ['visual', 'fx', 'sliders', 'games'];
+const SHARE_MODULES = ['visual', 'fx', 'sliders', 'games', 'touch'];
+const SHARED_BY_DEFAULT = new Set(['touch']); // guests keep the touch pad until the host unticks it
 const MODULE_OF = { mode: 'visual', kaleido: 'fx', echo: 'fx', bloom: 'fx', ripple: 'fx', invert: 'fx', swap: 'fx' };
 for (const k of SLIDER_KEYS) MODULE_OF[k] = 'sliders';
 
@@ -415,7 +416,7 @@ class AnimationControls {
     this.version = 0;
     this.values = {};
     this.lock = 'open'; // not part of reset: only a host changes it
-    this.share = Object.fromEntries(SHARE_MODULES.map((m) => [m, false])); // same
+    this.share = Object.fromEntries(SHARE_MODULES.map((m) => [m, SHARED_BY_DEFAULT.has(m)])); // same
     this.reset();
     // Until someone changes a control, the first display to connect may seed mode/FX from its saved choice.
     this.touched = false;
@@ -1048,7 +1049,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
 
     // Touch pad: a tap bursts on the display at the same spot in the phone's colour. A drag stirs
     // the picture (with the finger's velocity) or paints on it. Only 'locked' turns it off for non-hosts.
-    const touchAllowed = () => role === 'input' && heart && (host || anim.lock !== 'locked');
+    const touchAllowed = () => role === 'input' && heart && (host || (anim.share.touch && anim.lock !== 'locked'));
     let lastTap = 0;
     let lastDrag = 0;
     socket.on('touch', (data) => {

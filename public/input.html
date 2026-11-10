@@ -31,9 +31,9 @@
       </div>
       <div id="joinTitle" class="field-label">How are you joining?</div>
       <div id="sourceGrid" class="chips source-chips" role="group" aria-label="How are you joining?">
+        <button type="button" class="chip" data-join="heart">Heart camera</button>
         <button type="button" class="chip" data-join="tap">Tap</button>
         <button type="button" class="chip" data-join="dance">Dance</button>
-        <button type="button" class="chip" data-join="heart">Heart camera</button>
       </div>
 
       <div id="panelTap" class="join-panel" hidden>
@@ -61,10 +61,13 @@
       <div class="muted"><span id="roomSensors">0</span> joined</div>
     </section>
 
-    <section class="card touch" aria-labelledby="touchTitle">
+    <section id="touchCard" class="card touch" aria-labelledby="touchTitle">
       <div class="anim-head">
         <h2 id="touchTitle">Touch pad</h2>
-        <span id="comboMsg" class="combo-msg" aria-live="polite"></span>
+        <div class="head-actions">
+          <span id="comboMsg" class="combo-msg" aria-live="polite"></span>
+          <label class="share" hidden><input type="checkbox" data-share="touch" checked> Share</label>
+        </div>
       </div>
       <div class="tool-row">
         <div id="toolGrid" class="chips" role="group" aria-label="Touch pad tool">

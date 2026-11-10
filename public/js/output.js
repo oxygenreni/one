@@ -100,8 +100,12 @@
     .then((info) => {
       const url = info.inputUrls[0] || `${location.origin}/input.html`;
       $('joinUrl').textContent = url + (url.startsWith('https://') ? '' : '  (HTTPS needed for phone cameras)');
+      $('qrCornerUrl').textContent = url.replace(/^https?:\/\//, '');
     })
-    .catch(() => ($('joinUrl').textContent = `${location.origin}/input.html`));
+    .catch(() => {
+      $('joinUrl').textContent = `${location.origin}/input.html`;
+      $('qrCornerUrl').textContent = `${location.host}/input.html`;
+    });
 
   // ======================================================================== collective pulse
   /**
@@ -1978,6 +1982,16 @@
   }
   ['mousemove', 'pointerdown', 'keydown', 'touchstart'].forEach((e) => window.addEventListener(e, poke, { passive: true }));
 
+  // QR code in the corner, so more phones can join after the show has started (button or Q).
+  function toggleQr() {
+    const corner = $('qrCorner');
+    corner.hidden = !corner.hidden;
+    const b = $('qrBtn');
+    b.textContent = corner.hidden ? 'Show QR' : 'Hide QR';
+    b.setAttribute('aria-pressed', String(!corner.hidden));
+  }
+  $('qrBtn').addEventListener('click', toggleQr);
+
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
     const n = parseInt(e.key, 10);
@@ -1985,7 +1999,7 @@
     else if (e.key === 'ArrowRight') setMode(current + 1);
     else if (e.key === 'ArrowLeft') setMode(current - 1);
     else if (e.key === 'h' || e.key === 'H') ui.classList.toggle('hidden');
-    else if (e.key === 'q' || e.key === 'Q') $('qrCorner').hidden = !$('qrCorner').hidden;
+    else if (e.key === 'q' || e.key === 'Q') toggleQr();
     else if (e.key === 'm' || e.key === 'M') toggleHeartbeat();
     else if (e.key === 'f' || e.key === 'F') {
       if (document.fullscreenElement) document.exitFullscreen();

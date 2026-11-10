@@ -194,7 +194,7 @@
   const MODULE_OF = { mode: 'visual' };
   for (const [id] of FX) MODULE_OF[id] = 'fx';
   for (const k of SLIDER_KEYS) MODULE_OF[k] = 'sliders';
-  const shared = (m) => !!(anim.share && anim.share[m]);
+  const shared = (m) => (anim.share ? !!anim.share[m] : m === 'touch'); // touch is shared until the host says otherwise
   const can = (key) => isHost || (shared(MODULE_OF[key]) && lockAllows(key));
   const gamesAllowed = () => isHost || (shared('games') && lockLevel() === 'open');
   document.querySelectorAll('[data-share]').forEach((box) => box.addEventListener('change', () => {
@@ -210,6 +210,8 @@
       box.closest('.share').hidden = !isHost;
     });
     $('animReset').hidden = !isHost;
+    $('touchCard').hidden = !isHost && !shared('touch');
+    if (!touchAllowed() && tilting) stopTilt();
     $('hostCard').hidden = isHost;
   }
 
@@ -307,7 +309,7 @@
   let holdTimer = null;
   let holding = false;
   let crowdText = '';
-  const touchAllowed = () => isHost || lockLevel() !== 'locked';
+  const touchAllowed = () => isHost || (shared('touch') && lockLevel() !== 'locked');
 
   function renderTouchHint() {
     $('touchHint').textContent = !touchAllowed() ? 'The host has locked the touch pad.' : crowdText || TOOL_HINTS[tool];
@@ -578,8 +580,8 @@
   const RHYTHM_MIN_GAP_MS = 55; // the server drops pulse messages closer together than 50 ms
   const JOIN_KEY = 'pulse.join';
   const rhythm = new Rhythm();
-  let join = 'tap';
-  try { join = localStorage.getItem(JOIN_KEY) || 'tap'; } catch (_) { /* ignore */ }
+  let join = 'heart'; // the heartbeat reader is the default way in
+  try { join = localStorage.getItem(JOIN_KEY) || 'heart'; } catch (_) { /* ignore */ }
   let dancing = false;
   let danceEnergy = 0;
   let rhythmSending = false;
@@ -636,7 +638,7 @@
   }, PULSE_SEND_MS);
 
   function setJoin(j) {
-    if (!['tap', 'dance', 'heart'].includes(j)) j = 'tap';
+    if (!['tap', 'dance', 'heart'].includes(j)) j = 'heart';
     if (j !== 'heart' && running) stopSensor();
     if (j !== 'dance' && dancing) stopDance();
     join = j;

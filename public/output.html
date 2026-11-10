@@ -20,9 +20,7 @@
 
   <div id="start" class="start">
     <div class="start-card">
-      <p class="eyebrow"><span class="signal"></span>Live visualizer</p>
       <h1>Pul<span>se</span></h1>
-      <p class="lead">A room full of heartbeats, rendered live.</p>
       <button id="startBtn" class="btn primary" type="button">Start display</button>
       <p class="hint">The visuals listen to the computer's <b>system audio</b>. When Chrome asks, choose <b>Entire screen</b>, tick <b>Also share system audio</b>, then click <b>Hide</b> on the sharing bar.</p>
       <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page" width="180" height="180">
@@ -34,6 +32,7 @@
   <div id="qrCorner" class="qr-corner" hidden>
     <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page">
     <span>Scan to join</span>
+    <span id="qrCornerUrl" class="qr-url mono"></span>
   </div>
 
   <div id="ui" class="ui">
@@ -42,6 +41,7 @@
       <span><b id="hudUsers">0</b> joined</span>
       <button id="hbBtn" class="btn small hb-btn" type="button">Live beat</button>
       <button id="lockBtn" class="btn small lock-btn" type="button">Phones: all</button>
+      <button id="qrBtn" class="btn small" type="button" aria-pressed="false" title="Show a QR code so more phones can join (Q)">Show QR</button>
     </div>
 
     <div class="hud hud-right">
