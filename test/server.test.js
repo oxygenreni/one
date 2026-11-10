@@ -241,18 +241,6 @@ test('socket flow: animation controls are shared between many participants', asy
   assert.equal(late.heartbeat, false);
 });
 
-test('PulseAggregator reports beats per phone', () => {
-  const a = new PulseAggregator();
-  const me = { n: 1, hue: 0.618 };
-  a.update('a', { bpm: 60, confidence: 0.9, beat: true }, 0, me);
-  a.update('a', { bpm: 60, confidence: 0.9, beat: false }, 50, me);
-  a.update('b', { bpm: 70, confidence: 0.1, beat: true }, 50, { n: 2, hue: 0.2 }); // too weak to show
-  let r = a.aggregate(100);
-  assert.deepEqual(r.hearts, [[1, 0.618, 1, 0.9]]);
-  r = a.aggregate(150);
-  assert.deepEqual(r.hearts, [[1, 0.618, 0, 0.9]], 'beats reset each tick');
-});
-
 test('canChange follows the lock level', () => {
   assert.equal(canChange('mode', false, 'open'), true);
   assert.equal(canChange('mode', false, 'limited'), false);
@@ -457,7 +445,6 @@ test('PulseAggregator averages dancers\' movement energy and counts taps as beat
   assert.equal(a.dancers, 2);
   assert.equal(a.motion, 0.6);
   assert.equal(a.sensors, 5);
-  assert.deepEqual(a.hearts.map((h) => h[0]), [5], 'only heart-camera phones get a ring');
   assert.equal(a.active, 2, 'only phones with a BPM set the tempo');
 });
 

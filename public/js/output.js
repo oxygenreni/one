@@ -37,7 +37,7 @@
       const m = parseInt(localStorage.getItem('pulse.mode'), 10);
       if (m >= 0) out.mode = m;
       const f = JSON.parse(localStorage.getItem('pulse.fx') || '{}');
-      for (const k of ['kaleido', 'echo', 'bloom', 'ripple', 'hearts', 'invert']) if (typeof f[k] === 'boolean') out[k] = f[k];
+      for (const k of ['kaleido', 'echo', 'bloom', 'ripple', 'invert']) if (typeof f[k] === 'boolean') out[k] = f[k];
     } catch (_) { /* ignore */ }
     return out;
   }
@@ -48,7 +48,7 @@
    * `ctl` is a per-frame smoothed copy so 15 Hz slider updates glide instead of stepping.
    */
   const controls = {
-    heartbeat: true, mode: 0, kaleido: false, echo: false, bloom: false, ripple: false, hearts: true, invert: false, swap: false,
+    heartbeat: true, mode: 0, kaleido: false, echo: false, bloom: false, ripple: false, invert: false, swap: false,
     lock: 'open', tempo: 62, chaos: 0.33, glow: 0.2, speed: 1, hue: 0,
   };
   const SMOOTHED = ['tempo', 'chaos', 'glow', 'speed', 'hue'];
@@ -138,11 +138,9 @@
     pulse.targetStrength = a.active > 0 ? clamp(0.35 + a.confidence, 0.35, 1) : 0;
     if (!controls.heartbeat) {
       // Live beat off: phones are shown in the HUD but don't drive anything.
-      hearts.clear();
       pulse.targetMotion = 0;
       return;
     }
-    trackHearts(a.hearts);
     pulse.targetMotion = a.motion || 0;
     // Every beat kicks, even a first tap that has no BPM yet.
     if (a.beats > 0) {
@@ -156,44 +154,6 @@
       pulse.phaseNudge -= (frac * 0.35) / n;
     }
   });
-
-  // ---- Per-phone hearts: each phone has its own colour and spot, and every one of its beats
-  // sends out a ring there, so people can find themselves in the visuals.
-  const MAX_HEART_RINGS = 32; // size of the uHearts array in fx-final.frag
-  const hearts = new Map();   // phone number -> { angle, radius, hue, age, conf, seen }
-  const heartData = new Float32Array(MAX_HEART_RINGS * 4);
-
-  function trackHearts(list) {
-    const t = performance.now();
-    for (const [n, hue, beats, conf] of list || []) {
-      let h = hearts.get(n);
-      if (!h) {
-        // Spot on a loose ring around the centre, placed by the phone's hue so colours spread out.
-        h = { angle: hue * TAU, radius: 0.55 + 0.25 * ((n * 0.381966) % 1), hue, age: 9 };
-        hearts.set(n, h);
-      }
-      h.conf = conf;
-      h.seen = t;
-      if (beats > 0) h.age = 0;
-    }
-    for (const [n, h] of hearts) if (t - h.seen > 2000) hearts.delete(n);
-  }
-
-  /** Ages the rings (real time, so they stay on the beat) and packs them for the shader. */
-  function heartUniforms(dt) {
-    const aspect = canvas.width / Math.max(1, canvas.height);
-    let i = 0;
-    for (const h of hearts.values()) {
-      h.age += dt;
-      if (i >= MAX_HEART_RINGS) continue;
-      heartData[i * 4] = Math.cos(h.angle) * h.radius * Math.min(1.3, aspect * 0.85);
-      heartData[i * 4 + 1] = Math.sin(h.angle) * h.radius;
-      heartData[i * 4 + 2] = h.age;
-      heartData[i * 4 + 3] = h.hue;
-      i++;
-    }
-    return i;
-  }
 
   // ---- Touch pad bursts from phones (see input.js): a tap ripples out from the spot it lands on,
   // drags leave small sparks, and taps from several phones at once merge into a rainbow shockwave.
@@ -1653,11 +1613,11 @@
     { id: 'echo', label: 'Echo', key: 'e' },
     { id: 'bloom', label: 'Bloom', key: 'b' },
     { id: 'ripple', label: 'Heart Ripple', key: 'r' },
-    { id: 'hearts', label: 'Hearts', key: 't' },
     { id: 'invert', label: 'Invert', key: 'i' },
     { id: 'swap', label: 'Music → Motion', key: 'x' },
   ];
-  const fx = { kaleido: false, echo: false, bloom: false, ripple: false, hearts: true, invert: false, swap: false };
+  const fx = { kaleido: false, echo: false, bloom: false, ripple: false, invert: false, swap: false };
+  delete fx.hearts; // dropped FX layer; ignore it in saved settings
   try {
     Object.assign(fx, JSON.parse(localStorage.getItem('pulse.fx') || '{}'));
   } catch (_) { /* ignore */ }
@@ -1713,7 +1673,7 @@
   }
 
   /** Runs the enabled post-processing chain: scene -> kaleido/ripples/bursts -> echo -> bloom -> screen. */
-  function runFx(dt, U, heartCount, burstCount, paintOn) {
+  function runFx(dt, U, burstCount, paintOn) {
     const P = programs;
     let src = view.rtScene;
 
@@ -1794,8 +1754,6 @@
       uHueRotate: hueRotate,
       uExposure: ctl.exposure,
       uSaturation: ctl.saturation,
-      uHeartCount: heartCount,
-      uHearts: heartData,
       uBurstCount: burstCount,
       uBursts: burstData,
       uBurstHue: burstHue,
@@ -1906,14 +1864,12 @@
 
     const cur = modes[current];
     // A colour shift only needs the final pass, so it also routes the scene through the FX chain.
-    const heartCount = heartUniforms(dt);
-    const showHearts = fx.hearts && heartCount > 0;
     const burstCount = burstUniforms(dt);
     updateRoom(dt);
     const paintOn = updatePaint(dt);
     const looks = ctl.hue > 0.002 || drv.hue > 0.002 || fx.invert || Math.abs(ctl.exposure - 1) > 0.01 || Math.abs(ctl.saturation - 1) > 0.01 || ctl.warp > 0.001 || ctl.punch > 0.001 || ctl.glitch > 0.001;
     const play = paintOn || smudges.length > 0 || Math.abs(room.pan[0]) + Math.abs(room.pan[1]) > 0.002 || room.charge > 0.005 || room.raceOn > 0.01 || room.passOn > 0.01;
-    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || showHearts || burstCount > 0 || looks || play;
+    const fxOn = fx.kaleido || fx.echo || fx.bloom || fx.ripple || burstCount > 0 || looks || play;
     // With FX enabled the mode renders off-screen and the FX chain composites to the screen.
     const sceneTarget = fxOn ? view.rtScene : null;
     if (fade < 1 && previous >= 0) {
@@ -1929,7 +1885,7 @@
       cur.update(sdt, U);
       cur.render(sceneTarget, U);
     }
-    if (fxOn) runFx(sdt, U, showHearts ? heartCount : 0, burstCount, paintOn);
+    if (fxOn) runFx(sdt, U, burstCount, paintOn);
     // Drags and blasts are used up by this frame's fluid and paint passes.
     strokes.length = 0;
     room.blast = 0;

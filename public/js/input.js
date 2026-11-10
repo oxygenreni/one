@@ -65,7 +65,7 @@
   // Everyone shares one set of controls (latest change wins). Ranges mirror ANIM_DEFS in server.js,
   // which clamps them anyway.
   const MODES = ['Domain Warp', 'Reaction-Diffusion', 'Fluid Tracers', 'Julia Set', 'Mandelbrot', 'Julia Fluid', 'Fractal Flight', 'Star Iris', 'Nebula Portals'];
-  const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple'], ['hearts', 'Hearts'], ['invert', 'Invert'], ['swap', 'Music → Motion']];
+  const FX = [['kaleido', 'Kaleidoscope'], ['echo', 'Echo'], ['bloom', 'Bloom'], ['ripple', 'Heart Ripple'], ['invert', 'Invert'], ['swap', 'Music → Motion']];
   const pct = (v) => `${Math.round(v * 100)}%`;
   const SLIDERS = [
     { key: 'chaos', label: 'Chaos', min: 0, max: 1, step: 0.01, fmt: pct, hint: 'Calm ← → harder beats, bending, zoom punches and glitches' },

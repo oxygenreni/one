@@ -31,7 +31,7 @@ To try it without phones, run `npm run simulate -- http://localhost:3000 25`. Th
 | Key | Action |
 | --- | --- |
 | `1`–`7` / click | Switch visual mode (organic noise dissolve between modes). Shared with every display and phone. |
-| `K` `E` `B` `R` `T` / click | Toggle the FX layers: Kaleidoscope, Echo, Bloom, Heart Ripple, Hearts. They stack and are shared too. |
+| `K` `E` `B` `R` / click | Toggle the FX layers: Kaleidoscope, Echo, Bloom, Heart Ripple. They stack and are shared too. |
 | `M` / **Live beat** button | Switch between the live beat and **Manual tempo**. In manual, phones and the music are ignored and the **Tempo** slider sets the rhythm at full strength. The HUD shows where the beat comes from: phones, music, or manual. |
 | **Phones** button | Host lock: cycles what phones may change between *all*, *sliders* only, and *none*. Hover over it to see the host PIN. |
 | `←` `→` | Cycle modes |
@@ -81,7 +81,7 @@ The server enforces the lock (`canChange` in `server.js`); the phone page only g
 
 ### Your own heartbeat
 
-Every phone gets its own colour (golden-ratio hues, so neighbours differ). The heart icon on the phone shows it. On the display, each phone with a good signal has a glowing dot in that colour, and each of its beats sends out a ring from it. This is the **Hearts** FX layer, on by default and limited to 32 at once. The server forwards per-phone beat counts in `pulse:agg` as `hearts: [[n, hue, beats, confidence], …]`. The rings are drawn last in `fx-final.frag`, after the colour shift, so each phone's colour matches what it shows.
+Every phone gets its own colour (golden-ratio hues, so neighbours differ). The heart icon on the phone shows it. Touch pad bursts on the display use that colour too, so people can find themselves in the visuals.
 
 ### Touch pad
 

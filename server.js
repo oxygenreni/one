@@ -51,7 +51,6 @@ const ANIM_DEFS = {
   echo: { type: 'bool', def: false },
   bloom: { type: 'bool', def: false },
   ripple: { type: 'bool', def: false },
-  hearts: { type: 'bool', def: true },      // one coloured ring per phone on each of its beats
   invert: { type: 'bool', def: false },     // FX: negative picture
   swap: { type: 'bool', def: false },       // false: beat moves, sound colours; true: sound moves, phones' beat colours
   tempo: { min: 40, max: 180, def: 62 },    // BPM in manual mode, or when nobody joins and no beat is heard
@@ -71,7 +70,6 @@ const LOCK_LEVELS = ['open', 'limited', 'locked'];
 const SLIDER_KEYS = new Set(['tempo', 'chaos', 'glow', 'speed', 'hue']);
 const PIN_ATTEMPT_MS = 2000;          // per-socket
 const MAX_PIN_FAILURES_PER_MIN = 20;  // server-wide, so a 6-digit PIN can't be brute-forced
-const MAX_HEARTS = 64;                // per-phone heartbeats forwarded to displays
 
 function canChange(key, host, lock) {
   if (host || lock === 'open') return true;
@@ -333,26 +331,20 @@ class PulseAggregator {
     this.beats = 0;
   }
 
-  /** `heart` ({ n, hue }) identifies the phone on the display; beats are also counted per phone. */
-  update(id, data, t, heart = null) {
+  update(id, data, t) {
     if (!data || typeof data !== 'object') return false;
     let bpm = finite(data.bpm);
     bpm = bpm >= 35 && bpm <= 210 ? bpm : 0;
-    const prev = this.sensors.get(id);
     const sample = {
       bpm,
       signal: clamp(finite(data.signal), -1, 1),
       confidence: clamp(finite(data.confidence), 0, 1),
       energy: typeof data.energy === 'number' && Number.isFinite(data.energy) ? clamp(data.energy, 0, 1) : null, // dancers only
       t,
-      heart,
-      ring: data.source === undefined || data.source === 'heart', // older pages are heart sensors
-      beats: prev ? prev.beats : 0,
     };
     this.sensors.set(id, sample);
     if (data.beat === true && sample.confidence > 0.15) {
       this.beats++;
-      sample.beats++;
     }
     return true;
   }
@@ -367,7 +359,6 @@ class PulseAggregator {
     let signal = 0;
     let confSum = 0;
     let active = 0;
-    const hearts = []; // [n, hue, beats since last tick, confidence] per heart-camera phone with a good signal
     let motion = 0; // average movement energy of the dancing phones
     let dancers = 0;
     for (const [id, s] of this.sensors) {
@@ -375,10 +366,6 @@ class PulseAggregator {
         this.sensors.delete(id);
         continue;
       }
-      if (s.heart && s.ring && s.confidence > 0.2 && hearts.length < MAX_HEARTS) {
-        hearts.push([s.heart.n, s.heart.hue, s.beats, Math.round(s.confidence * 100) / 100]);
-      }
-      s.beats = 0;
       if (s.energy !== null) {
         motion += s.energy;
         dancers++;
@@ -399,7 +386,6 @@ class PulseAggregator {
       beats: this.beats,
       active,
       sensors: n,
-      hearts,
       motion: dancers > 0 ? Math.round((motion / dancers) * 100) / 100 : 0,
       dancers,
       t,
@@ -933,7 +919,7 @@ function createApp({ useHttps = false, hostPin = process.env.HOST_PIN } = {}) {
       const t = Date.now();
       if (t - lastPulse < PULSE_MIN_INTERVAL_MS) return;
       lastPulse = t;
-      pulses.update(socket.id, data, t, heart);
+      pulses.update(socket.id, data, t);
     });
 
     socket.on('pulse:stop', () => pulses.remove(socket.id));
