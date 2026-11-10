@@ -309,7 +309,7 @@ test('socket flow: host lock, PIN, build info and per-phone colours', async (t) 
   const sharedState = nextState(phone2.c, (s) => s.share && s.share.sliders === true);
   display.c.emit('host:share', { sliders: true, bogus: true });
   const sh = await sharedState;
-  assert.deepEqual(sh.share, { visual: false, fx: false, sliders: true, games: false, touch: true });
+  assert.deepEqual(sh.share, { visual: false, fx: false, sliders: true, games: false, touch: false });
 
   // Limited: sliders pass, mode is rejected and the sender gets the real state back.
   const rejected = nextState(phone.c, (s) => s.force === true);
@@ -424,6 +424,10 @@ test('socket flow: touch pad bursts, combos and the lock', async (t) => {
   const display = await connect('output');
   const a = await connect('input');
   const b = await connect('input');
+  // The touch pad starts hidden for guests; the host shares it.
+  const touchOn = next(b, 'controls:state', (s) => s.share && s.share.touch);
+  display.emit('host:share', { touch: true });
+  await touchOn;
 
   const burst = next(display, 'touch:fx');
   a.emit('touch', { x: 0.25, y: 0.75 });
@@ -559,6 +563,10 @@ test('socket flow: stir drags, hold together, tilt and games', async (t) => {
   const display = await connect('output');
   const a = await connect('input');
   const b = await connect('input');
+  // The touch pad starts hidden for guests; the host shares it.
+  const touchOn = next(b, 'controls:state', (s) => s.share && s.share.touch);
+  display.emit('host:share', { touch: true });
+  await touchOn;
 
   const drag = next(display, 'touch:fx', (m) => m.d === 1);
   a.emit('touch', { x: 0.5, y: 0.5, drag: true, vx: 99, vy: -2, tool: 'paint' });

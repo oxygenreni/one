@@ -194,7 +194,7 @@
   const MODULE_OF = { mode: 'visual' };
   for (const [id] of FX) MODULE_OF[id] = 'fx';
   for (const k of SLIDER_KEYS) MODULE_OF[k] = 'sliders';
-  const shared = (m) => (anim.share ? !!anim.share[m] : m === 'touch'); // touch is shared until the host says otherwise
+  const shared = (m) => !!(anim.share && anim.share[m]);
   const can = (key) => isHost || (shared(MODULE_OF[key]) && lockAllows(key));
   const gamesAllowed = () => isHost || (shared('games') && lockLevel() === 'open');
   document.querySelectorAll('[data-share]').forEach((box) => box.addEventListener('change', () => {
