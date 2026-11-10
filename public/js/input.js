@@ -200,15 +200,10 @@
   function renderHostRow() {
     const row = $('hostRow');
     row.textContent = '';
-    if (!isHost) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'link-btn';
-      b.textContent = 'I\'m the host';
-      b.addEventListener('click', askForPin);
-      row.appendChild(b);
-      return;
-    }
+    // Guests only get the join options and the touch pad; the host's PIN unlocks the rest on this phone.
+    $('animCard').hidden = !isHost;
+    $('hostCard').hidden = isHost;
+    if (!isHost) return;
     const label = document.createElement('span');
     label.className = 'label';
     label.textContent = 'Host · phones can change:';
@@ -221,6 +216,8 @@
       row.appendChild(c);
     }
   }
+
+  $('hostBtn').addEventListener('click', askForPin);
 
   function askForPin() {
     const attempt = (window.prompt('Host PIN (shown in the server window):') || '').trim();
@@ -453,11 +450,13 @@
   function renderGame() {
     const s = game;
     const running = !!s.kind;
+    $('gamesCard').hidden = !isHost && !running;
+    $('gameGrid').hidden = !isHost;
     $('gameGrid').querySelectorAll('[data-game]').forEach((b) => {
       b.classList.toggle('active', s.kind === b.dataset.game);
       b.disabled = running || !fullControl();
     });
-    $('gameStop').hidden = !running || !fullControl();
+    $('gameStop').hidden = !running || !isHost;
     const st = $('gameStatus');
     const card = st.closest('.card');
     st.style.color = '';

@@ -175,6 +175,8 @@ main {
 
 .host-row { position: relative; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .host-row .label { color: var(--muted); font-family: var(--sans); font-weight: 300; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; margin-right: 4px; }
+.host-card { display: flex; justify-content: center; }
+.host-card .btn { width: 100%; }
 .link-btn {
   appearance: none; border: 0; border-bottom: 1px solid #cbcbcb; background: none; color: var(--fg);
   font: inherit; font-size: .82rem; padding: 6px 0; cursor: pointer;

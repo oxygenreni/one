@@ -78,19 +78,19 @@
       <div id="holdMeter" class="meter hold-meter" hidden aria-hidden="true"><div id="holdFill" class="meter-fill"></div></div>
     </section>
 
-    <section class="card games" aria-labelledby="gamesTitle">
+    <section id="gamesCard" class="card games" aria-labelledby="gamesTitle" hidden>
       <div class="anim-head">
         <h2 id="gamesTitle">Games</h2>
         <button id="gameStop" class="btn small" type="button" hidden>Stop</button>
       </div>
       <p id="gameStatus" class="status small">Start a game for the whole room.</p>
-      <div id="gameGrid" class="chips">
+      <div id="gameGrid" class="chips" hidden>
         <button type="button" class="chip" data-game="race">Tap race</button>
         <button type="button" class="chip" data-game="pass">Pass the colour</button>
       </div>
     </section>
 
-    <section class="card anim" aria-labelledby="animTitle">
+    <section id="animCard" class="card anim" aria-labelledby="animTitle" hidden>
       <div class="anim-head">
         <h2 id="animTitle">Animation controls</h2>
         <button id="animReset" class="btn small" type="button">Reset</button>
@@ -105,6 +105,9 @@
       <div id="sliders" class="sliders"></div>
     </section>
 
+    <section id="hostCard" class="card host-card">
+      <button id="hostBtn" class="btn" type="button">For host</button>
+    </section>
   </main>
 
   <video id="cam" playsinline muted autoplay class="hidden-capture"></video>
