@@ -14,8 +14,21 @@
   <link rel="stylesheet" href="css/input.css">
 </head>
 <body>
-  <header class="top"><h1>Pulse</h1></header>
+  <header class="top">
+    <h1>Pulse</h1>
+    <button class="info-btn" id="infoBtn" type="button" aria-expanded="false" aria-controls="infoBox" aria-label="About Pulse">i</button>
+  </header>
   <main>
+    <p class="intro">Pulse is a visual synthesizer. It turns the audio playing on your computer into live visuals, and phones connected over WebSocket add their own rhythm, colour and motion on top.</p>
+    <section class="card info-box" id="infoBox" hidden>
+      <strong>How it works</strong>
+      <ol>
+        <li><b>The display reads your desktop audio.</b> Open it on your computer and give the site permission to share system audio. The music's waveform and spectrum drive the visuals.</li>
+        <li><b>Phones send extra data.</b> Each phone that joins streams to the display over WebSocket. Its touch pad has a toggle: <b>Paint</b> changes the colour and <b>Stir</b> moves the motion.</li>
+        <li><b>Your heartbeat sets the tempo.</b> The phone's heart reader uses the camera to measure your pulse and turns it into a BPM. That beat works together with the audio. You can also tap or dance to set the beat instead.</li>
+      </ol>
+      <p class="muted small">Phones can also switch visual modes, effects and sliders like Chaos, Glow and Speed, unless the host has locked them.</p>
+    </section>
     <section class="card qr-card">
       <strong>Scan to join</strong>
       <img class="qr" src="/api/qr.svg" alt="QR code linking to the phone page" width="240" height="240">
@@ -32,6 +45,13 @@
     </a>
   </main>
   <script>
+    const infoBtn = document.getElementById('infoBtn');
+    const infoBox = document.getElementById('infoBox');
+    infoBtn.addEventListener('click', () => {
+      const open = infoBox.hidden;
+      infoBox.hidden = !open;
+      infoBtn.setAttribute('aria-expanded', String(open));
+    });
     fetch('/api/info').then((r) => r.json()).then((i) => {
       document.getElementById('joinUrl').textContent = i.inputUrls[0] || location.origin + '/input.html';
     });

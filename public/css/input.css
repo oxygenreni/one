@@ -87,6 +87,20 @@ main {
   padding: 18px 16px;
 }
 
+.intro { margin: 4px 0 0; color: var(--muted); font-weight: 300; font-size: 1rem; line-height: 1.55; }
+.info-btn {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--btn-bg); color: var(--cream);
+  font: italic 700 1rem/1 Georgia, serif; cursor: pointer;
+}
+.info-btn:hover, .info-btn[aria-expanded="true"] { border-color: var(--cream); background: rgb(255 255 227 / 12%); }
+.info-box { animation: info-in .2s ease-out; }
+.info-box ol { margin: 10px 0; padding-left: 1.2em; }
+.info-box li { margin: 6px 0; font-weight: 300; }
+.info-box li b { font-weight: 600; color: var(--cream); }
+@keyframes info-in { from { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { .info-box { animation: none; } }
+
 .muted { color: var(--muted); font-weight: 300; }
 .small { font-size: .82rem; }
 .status { margin: 10px 0; color: var(--muted); font-weight: 300; font-size: .9rem; line-height: 1.6; min-height: 1.2em; }
